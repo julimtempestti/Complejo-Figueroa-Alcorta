@@ -1,3 +1,5 @@
+name: Sync desde el repo original
+
 on:
   schedule:
     - cron: '*/30 * * * *'   # revisa cada 30 minutos
@@ -13,6 +15,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Configurar identidad de git
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
 
       - name: Traer cambios del repo original
         run: |
