@@ -307,6 +307,12 @@ const demoAuth = {
     emitAuth('SIGNED_OUT')
     return { error: null }
   },
+  async resetPasswordForEmail() {
+    return { data: null, error: { message: 'No disponible en modo demo.' } }
+  },
+  async updateUser() {
+    return { data: null, error: { message: 'No disponible en modo demo.' } }
+  },
 }
 
 // --- Cliente demo (misma "forma" que el cliente de supabase-js) ---------
