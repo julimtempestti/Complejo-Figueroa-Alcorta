@@ -25,10 +25,125 @@ const ROL_LABEL = {
   propietario: { txt: 'Propietario', clases: 'bg-amber-100 text-amber-700' },
 }
 
+// Modal de edición de un usuario existente.
+function EditarUsuarioModal({ usuario, deptos, esSuperAdmin, onClose, onGuardado }) {
+  const [email, setEmail] = useState(usuario.email || '')
+  const [rol, setRol] = useState(usuario.rol)
+  const [deptoId, setDeptoId] = useState(() => {
+    const d = deptos.find((x) => x.nombre === usuario.depto)
+    return d ? String(d.id) : String(deptos[0]?.id || '')
+  })
+  const [nombre, setNombre] = useState('')
+  const [guardando, setGuardando] = useState(false)
+
+  const necesitaDepto = rol === 'residente' || rol === 'propietario'
+
+  async function guardar(e) {
+    e.preventDefault()
+    if (!email.trim()) {
+      toast.error('El email no puede quedar vacío')
+      return
+    }
+    setGuardando(true)
+    try {
+      await apiUsuarios('editar', {
+        userId: usuario.id,
+        email: email.trim(),
+        rol,
+        deptoId: rol === 'admin' ? null : Number(deptoId),
+        nombre,
+      })
+      toast.success('Usuario actualizado')
+      onGuardado()
+      onClose()
+    } catch (err) {
+      toast.error(err.message)
+    }
+    setGuardando(false)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center px-4 z-50">
+      <div className="bg-white rounded-2xl p-6 w-full max-w-md">
+        <h3 className="text-base font-semibold text-slate-800 mb-4">Editar usuario</h3>
+        <form onSubmit={guardar} className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Email de acceso</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Categoría</label>
+            <select
+              value={rol}
+              onChange={(e) => setRol(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"
+            >
+              <option value="residente">Residente</option>
+              <option value="propietario">Propietario</option>
+              {esSuperAdmin && <option value="admin">Administrador</option>}
+            </select>
+          </div>
+          {necesitaDepto && (
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Departamento</label>
+              <select
+                value={deptoId}
+                onChange={(e) => setDeptoId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"
+              >
+                {deptos.map((d) => (
+                  <option key={d.id} value={d.id}>{d.nombre}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {necesitaDepto && (
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">
+                Nombre (opcional)
+              </label>
+              <input
+                type="text"
+                value={nombre}
+                onChange={(e) => setNombre(e.target.value)}
+                placeholder="Nombre y apellido"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"
+              />
+            </div>
+          )}
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium py-2.5 rounded-lg"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={guardando}
+              className="flex-1 bg-tinta hover:opacity-90 disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-lg"
+            >
+              {guardando ? 'Guardando...' : 'Guardar'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 export default function UsuariosPanel() {
   const [usuarios, setUsuarios] = useState([])
   const [deptos, setDeptos] = useState([])
   const [cargando, setCargando] = useState(true)
+  const [esSuperAdmin, setEsSuperAdmin] = useState(false)
+  const [editando, setEditando] = useState(null)
 
   // Formulario de alta
   const [email, setEmail] = useState('')
@@ -40,23 +155,23 @@ export default function UsuariosPanel() {
 
   const cargar = useCallback(async () => {
     try {
-      const [{ usuarios }, { data: d }] = await Promise.all([
+      const [{ usuarios, esSuperAdmin }, { data: d }] = await Promise.all([
         apiUsuarios('listar'),
         supabase.from('departamentos').select('id, nombre').order('id'),
       ])
       setUsuarios(usuarios || [])
+      setEsSuperAdmin(Boolean(esSuperAdmin))
       setDeptos(d || [])
-      if (d?.length && !deptoId) setDeptoId(String(d[0].id))
+      if (d?.length) setDeptoId((prev) => prev || String(d[0].id))
     } catch (err) {
       toast.error(err.message)
     }
     setCargando(false)
-  }, [deptoId])
+  }, [])
 
   useEffect(() => {
     cargar()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [cargar])
 
   async function crear(e) {
     e.preventDefault()
@@ -115,6 +230,8 @@ export default function UsuariosPanel() {
   }
 
   const necesitaDepto = rol === 'residente' || rol === 'propietario'
+  // Un admin normal no puede tocar cuentas de administrador
+  const puedeGestionar = (u) => u.rol !== 'admin' || esSuperAdmin
 
   return (
     <section>
@@ -155,7 +272,7 @@ export default function UsuariosPanel() {
             >
               <option value="residente">Residente</option>
               <option value="propietario">Propietario</option>
-              <option value="admin">Administrador</option>
+              {esSuperAdmin && <option value="admin">Administrador</option>}
             </select>
           </div>
           {necesitaDepto && (
@@ -218,6 +335,7 @@ export default function UsuariosPanel() {
               )}
               {usuarios.map((u) => {
                 const rl = ROL_LABEL[u.rol] || ROL_LABEL.admin
+                const gestionable = puedeGestionar(u)
                 return (
                   <tr key={u.id}>
                     <td className="px-4 py-3 text-slate-700">{u.email}</td>
@@ -228,20 +346,30 @@ export default function UsuariosPanel() {
                     </td>
                     <td className="px-4 py-3 text-slate-500">{u.depto || '—'}</td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-2 justify-end">
-                        <button
-                          onClick={() => cambiarPassword(u)}
-                          className="text-xs font-medium text-slate-600 hover:text-tinta bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition"
-                        >
-                          Contraseña
-                        </button>
-                        <button
-                          onClick={() => eliminar(u)}
-                          className="text-xs font-medium text-red-400 hover:text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-lg transition"
-                        >
-                          Eliminar
-                        </button>
-                      </div>
+                      {gestionable ? (
+                        <div className="flex gap-2 justify-end flex-wrap">
+                          <button
+                            onClick={() => setEditando(u)}
+                            className="text-xs font-medium text-slate-600 hover:text-tinta bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            onClick={() => cambiarPassword(u)}
+                            className="text-xs font-medium text-slate-600 hover:text-tinta bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition"
+                          >
+                            Contraseña
+                          </button>
+                          <button
+                            onClick={() => eliminar(u)}
+                            className="text-xs font-medium text-red-400 hover:text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-lg transition"
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="text-right text-xs text-slate-300">—</div>
+                      )}
                     </td>
                   </tr>
                 )
@@ -249,6 +377,16 @@ export default function UsuariosPanel() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {editando && (
+        <EditarUsuarioModal
+          usuario={editando}
+          deptos={deptos}
+          esSuperAdmin={esSuperAdmin}
+          onClose={() => setEditando(null)}
+          onGuardado={cargar}
+        />
       )}
     </section>
   )
