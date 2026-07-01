@@ -2,8 +2,8 @@ name: Sync desde el repo original
 
 on:
   schedule:
-    - cron: '*/30 * * * *'   # revisa cada 30 minutos
-  workflow_dispatch: {}       # tambien se puede disparar a mano
+    - cron: '*/5 * * * *'   # revisa cada 5 minutos
+  workflow_dispatch: {}       # también se puede disparar a mano
 
 jobs:
   sync:
