@@ -2,17 +2,25 @@
 // Usa la clave service_role (getSupabaseAdmin) para crear/editar/borrar
 // cuentas de auth, algo que NUNCA puede hacerse desde el navegador.
 //
-// Seguridad: antes de cualquier acción verifica que quien llama sea un
-// administrador (su token es válido y NO está vinculado como residente ni
-// propietario), replicando la lógica de is_admin() de la base.
+// Jerarquía de permisos:
+//   - super admin  -> email en SUPER_ADMIN_EMAIL. Poder total: puede crear,
+//                     editar y borrar administradores. Queda OCULTO de la
+//                     lista de usuarios (no figura en ningún lado).
+//   - admin        -> cualquier cuenta no vinculada a depto ni propietario.
+//                     Puede gestionar residentes y propietarios, pero NO
+//                     puede crear/editar/borrar otros administradores.
+//   - residente / propietario -> sin acceso a este endpoint.
 //
 // Acciones (body.accion):
-//   'listar'            -> devuelve todos los usuarios con su rol y depto
+//   'listar'            -> { usuarios, esSuperAdmin }
 //   'crear'             -> { email, password, rol, deptoId, nombre }
+//   'editar'            -> { userId, email, rol, deptoId, nombre }
 //   'cambiar_password'  -> { userId, password }
 //   'eliminar'          -> { userId }
 
 import { getSupabaseAdmin } from './_lib/supabaseAdmin.js'
+
+const SUPER_ADMIN_EMAIL = (process.env.SUPER_ADMIN_EMAIL || 'marcoluisvallebella@gmail.com').toLowerCase()
 
 async function verificarAdmin(admin, req) {
   const auth = req.headers.authorization || ''
@@ -29,7 +37,51 @@ async function verificarAdmin(admin, req) {
   if (esResidente || esProp) {
     return { ok: false, code: 403, error: 'Solo el administrador puede gestionar usuarios' }
   }
-  return { ok: true, user }
+  const esSuperAdmin = (user.email || '').toLowerCase() === SUPER_ADMIN_EMAIL
+  return { ok: true, user, esSuperAdmin }
+}
+
+// Devuelve { email, rol } del usuario objetivo (para chequear permisos).
+async function infoUsuario(admin, userId) {
+  const { data } = await admin.auth.admin.getUserById(userId)
+  const email = data?.user?.email || null
+  const [{ data: dep }, { data: prp }] = await Promise.all([
+    admin.from('departamentos').select('id').eq('user_id', userId).maybeSingle(),
+    admin.from('propietarios').select('id').eq('user_id', userId).maybeSingle(),
+  ])
+  let rol = 'admin'
+  if (dep) rol = 'residente'
+  else if (prp) rol = 'propietario'
+  return { email, rol }
+}
+
+// Vincula (o desvincula) al usuario según su rol/depto.
+async function revincular(admin, userId, rol, deptoId, email, nombre) {
+  // Primero desvincula de todo
+  await admin.from('departamentos').update({ user_id: null }).eq('user_id', userId)
+  await admin.from('propietarios').update({ user_id: null }).eq('user_id', userId)
+
+  if (rol === 'residente') {
+    await admin.from('departamentos').update({ user_id: userId }).eq('id', deptoId)
+  } else if (rol === 'propietario') {
+    // Reutiliza una ficha de propietario sin cuenta para ese depto, o crea una.
+    const { data: existente } = await admin
+      .from('propietarios')
+      .select('id')
+      .eq('depto_id', deptoId)
+      .is('user_id', null)
+      .limit(1)
+      .maybeSingle()
+    if (existente) {
+      await admin.from('propietarios')
+        .update({ user_id: userId, email, nombre: nombre?.trim() || '' })
+        .eq('id', existente.id)
+    } else {
+      await admin.from('propietarios')
+        .insert({ depto_id: deptoId, nombre: nombre?.trim() || '', email, user_id: userId })
+    }
+  }
+  // admin -> queda sin vincular
 }
 
 export default async function handler(req, res) {
@@ -41,6 +93,7 @@ export default async function handler(req, res) {
 
   const check = await verificarAdmin(admin, req)
   if (!check.ok) return res.status(check.code).json({ error: check.error })
+  const { esSuperAdmin } = check
 
   const { accion } = req.body || {}
 
@@ -53,24 +106,26 @@ export default async function handler(req, res) {
         admin.from('propietarios').select('id, nombre, user_id, depto_id'),
       ])
 
-      const lista = users.map((u) => {
-        const depto = (deptos || []).find((d) => d.user_id === u.id)
-        if (depto) return { id: u.id, email: u.email, rol: 'residente', depto: depto.nombre }
-        const prop = (props || []).find((p) => p.user_id === u.id)
-        if (prop) {
-          const d = (deptos || []).find((dd) => dd.id === prop.depto_id)
-          return { id: u.id, email: u.email, rol: 'propietario', depto: d?.nombre || null }
-        }
-        return { id: u.id, email: u.email, rol: 'admin', depto: null }
-      })
+      const lista = users
+        // El super admin no figura en la lista para nadie
+        .filter((u) => (u.email || '').toLowerCase() !== SUPER_ADMIN_EMAIL)
+        .map((u) => {
+          const depto = (deptos || []).find((d) => d.user_id === u.id)
+          if (depto) return { id: u.id, email: u.email, rol: 'residente', depto: depto.nombre }
+          const prop = (props || []).find((p) => p.user_id === u.id)
+          if (prop) {
+            const d = (deptos || []).find((dd) => dd.id === prop.depto_id)
+            return { id: u.id, email: u.email, rol: 'propietario', depto: d?.nombre || null }
+          }
+          return { id: u.id, email: u.email, rol: 'admin', depto: null }
+        })
 
-      // admin primero, después por email
       lista.sort((a, b) => {
         if (a.rol === 'admin' && b.rol !== 'admin') return -1
         if (b.rol === 'admin' && a.rol !== 'admin') return 1
         return (a.email || '').localeCompare(b.email || '')
       })
-      return res.status(200).json({ usuarios: lista })
+      return res.status(200).json({ usuarios: lista, esSuperAdmin })
     }
 
     // --- CREAR ----------------------------------------------------------
@@ -78,6 +133,9 @@ export default async function handler(req, res) {
       const { email, password, rol, deptoId, nombre } = req.body
       if (!email || !password || !rol) {
         return res.status(400).json({ error: 'Faltan datos (email, contraseña o rol)' })
+      }
+      if (rol === 'admin' && !esSuperAdmin) {
+        return res.status(403).json({ error: 'Solo el super administrador puede crear administradores' })
       }
       if ((rol === 'residente' || rol === 'propietario') && !deptoId) {
         return res.status(400).json({ error: 'Elegí el departamento' })
@@ -96,7 +154,6 @@ export default async function handler(req, res) {
       }
 
       const uid = creado.user.id
-
       if (rol === 'residente') {
         await admin.from('departamentos').update({ user_id: uid }).eq('id', deptoId)
         if (nombre?.trim()) {
@@ -110,17 +167,54 @@ export default async function handler(req, res) {
           user_id: uid,
         })
       }
-      // admin -> no se vincula a nada
-
       return res.status(200).json({ ok: true, id: uid })
+    }
+
+    // --- EDITAR ---------------------------------------------------------
+    if (accion === 'editar') {
+      const { userId, email, rol, deptoId, nombre } = req.body
+      if (!userId || !rol) return res.status(400).json({ error: 'Faltan datos' })
+
+      const objetivo = await infoUsuario(admin, userId)
+      // El super admin no se toca desde acá
+      if ((objetivo.email || '').toLowerCase() === SUPER_ADMIN_EMAIL) {
+        return res.status(403).json({ error: 'No se puede editar esta cuenta' })
+      }
+      // Editar un admin, o convertir a alguien en admin, requiere super admin
+      if ((objetivo.rol === 'admin' || rol === 'admin') && !esSuperAdmin) {
+        return res.status(403).json({ error: 'Solo el super administrador puede gestionar administradores' })
+      }
+      if ((rol === 'residente' || rol === 'propietario') && !deptoId) {
+        return res.status(400).json({ error: 'Elegí el departamento' })
+      }
+
+      if (email) {
+        const { error: errEmail } = await admin.auth.admin.updateUserById(userId, { email })
+        if (errEmail) {
+          const msg = /already been registered|already exists/i.test(errEmail.message)
+            ? 'Ya existe otro usuario con ese email'
+            : errEmail.message
+          return res.status(400).json({ error: msg })
+        }
+      }
+
+      await revincular(admin, userId, rol, deptoId, email, nombre)
+      return res.status(200).json({ ok: true })
     }
 
     // --- CAMBIAR CONTRASEÑA ---------------------------------------------
     if (accion === 'cambiar_password') {
       const { userId, password } = req.body
-      if (!userId || !password) {
-        return res.status(400).json({ error: 'Faltan datos' })
+      if (!userId || !password) return res.status(400).json({ error: 'Faltan datos' })
+
+      const objetivo = await infoUsuario(admin, userId)
+      if ((objetivo.email || '').toLowerCase() === SUPER_ADMIN_EMAIL && !esSuperAdmin) {
+        return res.status(403).json({ error: 'No autorizado' })
       }
+      if (objetivo.rol === 'admin' && !esSuperAdmin) {
+        return res.status(403).json({ error: 'Solo el super administrador puede cambiar la clave de un administrador' })
+      }
+
       const { error } = await admin.auth.admin.updateUserById(userId, { password })
       if (error) return res.status(400).json({ error: error.message })
       return res.status(200).json({ ok: true })
@@ -133,8 +227,15 @@ export default async function handler(req, res) {
       if (userId === check.user.id) {
         return res.status(400).json({ error: 'No podés eliminar tu propia cuenta' })
       }
-      // Las FK (departamentos/propietarios.user_id) son ON DELETE SET NULL,
-      // así que se desvinculan solas al borrar el usuario de auth.
+
+      const objetivo = await infoUsuario(admin, userId)
+      if ((objetivo.email || '').toLowerCase() === SUPER_ADMIN_EMAIL) {
+        return res.status(403).json({ error: 'No se puede eliminar esta cuenta' })
+      }
+      if (objetivo.rol === 'admin' && !esSuperAdmin) {
+        return res.status(403).json({ error: 'Solo el super administrador puede eliminar administradores' })
+      }
+
       const { error } = await admin.auth.admin.deleteUser(userId)
       if (error) return res.status(400).json({ error: error.message })
       return res.status(200).json({ ok: true })

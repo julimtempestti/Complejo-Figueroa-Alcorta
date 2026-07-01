@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase'
 
 const AuthContext = createContext(null)
@@ -13,20 +13,41 @@ export function AuthProvider({ children }) {
   const [departamento, setDepartamento] = useState(null)
   const [propietario, setPropietario] = useState(null)
   const [cargandoPerfil, setCargandoPerfil] = useState(true)
+  // Recordamos qué usuario está activo. Así ignoramos los eventos de auth
+  // que solo refrescan el token (al volver a la pestaña) pero no cambian
+  // de usuario, evitando que la app recargue todo cada vez.
+  const uidActual = useRef(undefined)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session))
+    supabase.auth.getSession().then(({ data }) => {
+      uidActual.current = data.session?.user?.id ?? null
+      setSession(data.session)
+    })
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, sesion) => {
-      setSession(sesion)
+      const nuevoUid = sesion?.user?.id ?? null
+      // Solo actualizamos si realmente cambió el usuario (login/logout),
+      // no en un simple refresco de token del mismo usuario.
+      if (nuevoUid !== uidActual.current) {
+        uidActual.current = nuevoUid
+        setSession(sesion)
+      }
     })
 
     return () => listener.subscription.unsubscribe()
   }, [])
 
+  // El perfil se recarga SOLO cuando cambia el usuario (login/logout), no en
+  // cada refresco de sesión. Por eso la dependencia es el id del usuario y no
+  // el objeto `session` (que Supabase regenera al volver a la pestaña).
+  const sesionLista = session !== undefined
+  const userId = session?.user?.id ?? null
+
   useEffect(() => {
+    if (!sesionLista) return
+
     async function cargarPerfil() {
-      if (!session?.user) {
+      if (!userId) {
         setRol(null)
         setDepartamento(null)
         setPropietario(null)
@@ -35,13 +56,12 @@ export function AuthProvider({ children }) {
       }
 
       setCargandoPerfil(true)
-      const uid = session.user.id
 
       // ¿Residente?
       const { data: depto } = await supabase
         .from('departamentos')
         .select('*')
-        .eq('user_id', uid)
+        .eq('user_id', userId)
         .maybeSingle()
 
       if (depto) {
@@ -56,7 +76,7 @@ export function AuthProvider({ children }) {
       const { data: prop } = await supabase
         .from('propietarios')
         .select('*')
-        .eq('user_id', uid)
+        .eq('user_id', userId)
         .maybeSingle()
 
       if (prop) {
@@ -79,8 +99,8 @@ export function AuthProvider({ children }) {
       setCargandoPerfil(false)
     }
 
-    if (session !== undefined) cargarPerfil()
-  }, [session])
+    cargarPerfil()
+  }, [userId, sesionLista])
 
   const cerrarSesion = () => supabase.auth.signOut()
 
