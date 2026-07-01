@@ -21,6 +21,7 @@ export default function ExtraordinariasPanel({ editable = false, miDeptoId = nul
   const [monto, setMonto] = useState('')
   const [unidadesSel, setUnidadesSel] = useState(null) // null = aún no inicializado
   const [creando, setCreando] = useState(false)
+  const [editandoId, setEditandoId] = useState(null) // id de la extraordinaria en edición (null = creando nueva)
   const [expandidas, setExpandidas] = useState(() => new Set())
   const [informando, setInformando] = useState(null) // { extra, depto } para el modal del propietario
 
@@ -71,6 +72,40 @@ export default function ExtraordinariasPanel({ editable = false, miDeptoId = nul
     })
   }
 
+  function cancelarEdicion() {
+    setEditandoId(null)
+    setRazon('')
+    setMonto('')
+    setUnidadesSel(deptos.map((d) => d.id))
+  }
+
+  function iniciarEdicion(extra) {
+    setEditandoId(extra.id)
+    setRazon(extra.razon)
+    setMonto(String(extra.monto))
+    setUnidadesSel(
+      extra.afecta_deptos && extra.afecta_deptos.length ? extra.afecta_deptos : deptos.map((d) => d.id),
+    )
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  async function eliminar(extra) {
+    if (!window.confirm(`¿Eliminar la expensa extraordinaria "${extra.razon}"? Se borrarán también los pagos registrados de esta expensa.`)) {
+      return
+    }
+    // Borramos primero las dependencias (pagos y avisos de transferencia) por las FK.
+    await supabase.from('pagos_extraordinarios').delete().eq('extraordinaria_id', extra.id)
+    await supabase.from('transferencias').delete().eq('extraordinaria_id', extra.id)
+    const { error } = await supabase.from('extraordinarias').delete().eq('id', extra.id)
+    if (error) {
+      toast.error('No se pudo eliminar')
+      return
+    }
+    toast.success('Expensa extraordinaria eliminada')
+    if (editandoId === extra.id) cancelarEdicion()
+    cargar()
+  }
+
   async function crear(e) {
     e.preventDefault()
     if (!razon.trim() || !monto || Number(monto) <= 0) {
@@ -83,18 +118,17 @@ export default function ExtraordinariasPanel({ editable = false, miDeptoId = nul
     }
     setCreando(true)
     const afecta_deptos = seleccion.length === deptos.length ? null : seleccion
-    const { error } = await supabase
-      .from('extraordinarias')
-      .insert({ razon, monto: Number(monto), afecta_deptos })
+    const payload = { razon, monto: Number(monto), afecta_deptos }
+    const { error } = editandoId
+      ? await supabase.from('extraordinarias').update(payload).eq('id', editandoId)
+      : await supabase.from('extraordinarias').insert(payload)
     setCreando(false)
     if (error) {
-      toast.error('No se pudo crear la expensa extraordinaria')
+      toast.error(editandoId ? 'No se pudieron guardar los cambios' : 'No se pudo crear la expensa extraordinaria')
       return
     }
-    toast.success('Expensa extraordinaria creada')
-    setRazon('')
-    setMonto('')
-    setUnidadesSel(deptos.map((d) => d.id))
+    toast.success(editandoId ? 'Expensa extraordinaria actualizada' : 'Expensa extraordinaria creada')
+    cancelarEdicion()
     cargar()
   }
 
@@ -142,6 +176,11 @@ export default function ExtraordinariasPanel({ editable = false, miDeptoId = nul
 
       {editable && (
         <form onSubmit={crear} className="bg-white border border-tinta/10 rounded-2xl p-5 mb-6">
+          {editandoId && (
+            <p className="text-xs text-tinta font-medium mb-3">
+              ✎ Editando una expensa extraordinaria — modificá los campos y guardá.
+            </p>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
             <div className="sm:col-span-3">
               <label className="block text-xs font-medium text-slate-500 mb-1">Razón de la expensa extraordinaria</label>
@@ -162,14 +201,23 @@ export default function ExtraordinariasPanel({ editable = false, miDeptoId = nul
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"
               />
             </div>
-            <div>
+            <div className="flex gap-2">
               <button
                 type="submit"
                 disabled={creando}
-                className="w-full bg-tinta hover:opacity-90 disabled:opacity-50 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition"
+                className="flex-1 bg-tinta hover:opacity-90 disabled:opacity-50 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition"
               >
-                {creando ? 'Creando...' : 'Crear'}
+                {creando ? 'Guardando...' : editandoId ? 'Guardar' : 'Crear'}
               </button>
+              {editandoId && (
+                <button
+                  type="button"
+                  onClick={cancelarEdicion}
+                  className="px-3 py-2.5 rounded-lg text-sm font-medium text-slate-500 bg-slate-100 hover:bg-slate-200 transition"
+                >
+                  Cancelar
+                </button>
+              )}
             </div>
           </div>
 
@@ -248,6 +296,23 @@ export default function ExtraordinariasPanel({ editable = false, miDeptoId = nul
                 </div>
                 <span className={`text-slate-400 mt-1 transition-transform ${abierta ? 'rotate-180' : ''}`}>▾</span>
               </button>
+
+              {editable && (
+                <div className="flex gap-2 mt-3">
+                  <button
+                    onClick={() => iniciarEdicion(extra)}
+                    className="text-xs font-medium text-slate-600 hover:text-tinta bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition"
+                  >
+                    Editar
+                  </button>
+                  <button
+                    onClick={() => eliminar(extra)}
+                    className="text-xs font-medium text-red-400 hover:text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-lg transition"
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              )}
 
               <div className="mt-4">
                 <MetaBar recaudado={recaudado} objetivo={Number(extra.monto)} />

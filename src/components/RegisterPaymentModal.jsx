@@ -10,7 +10,7 @@ export default function RegisterPaymentModal({ departamentos, deptoIdInicial, on
   const [anioSel, setAnioSel] = useState(anio)
   const [mesSel, setMesSel] = useState(mes)
   const [monto, setMonto] = useState('')
-  const [metodo, setMetodo] = useState('efectivo')
+  const [metodo, setMetodo] = useState('transferencia')
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
   const [notas, setNotas] = useState('')
   const [enviando, setEnviando] = useState(false)
