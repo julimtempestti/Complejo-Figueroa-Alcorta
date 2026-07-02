@@ -51,9 +51,10 @@ export default function TablaDeudaComplejo({ editable = false }) {
       const pagoSel = mesRow
         ? (todosPagos || []).find((p) => p.depto_id === depto.id && p.mes_id === mesRow.id) || null
         : null
-      const estadoSel = mesRow
-        ? calcularEstado({ tienePago: Boolean(pagoSel), anio: vistaAnio, mes: vistaMes })
-        : null
+      // El estado del mes (Al día / Pendiente / Vencido) se calcula siempre,
+      // aunque el mes todavía no tenga monto definido: si no hay pago, muestra
+      // "Pendiente" hasta el día 10 y "Vencido" después.
+      const estadoSel = calcularEstado({ tienePago: Boolean(pagoSel), anio: vistaAnio, mes: vistaMes })
       return { depto, estadoSel, pagoSel, mesesAdeudados, deuda }
     })
 
