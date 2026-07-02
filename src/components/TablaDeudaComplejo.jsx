@@ -43,7 +43,9 @@ export default function TablaDeudaComplejo({ editable = false }) {
         if (posterior) continue
         const pago = (todosPagos || []).find((p) => p.depto_id === depto.id && p.mes_id === m.id)
         const estado = calcularEstado({ tienePago: Boolean(pago), anio: m.anio, mes: m.mes })
-        if (estado !== 'pagado') {
+        // Solo "vencido" (pasó el día 10 sin pagar) es deuda. "Pendiente" (mes
+        // corriente antes del día 10) NO cuenta como deuda.
+        if (estado === 'vencido') {
           mesesAdeudados += 1
           deuda += Number(m.monto_expensa || 0)
         }
@@ -51,9 +53,10 @@ export default function TablaDeudaComplejo({ editable = false }) {
       const pagoSel = mesRow
         ? (todosPagos || []).find((p) => p.depto_id === depto.id && p.mes_id === mesRow.id) || null
         : null
-      const estadoSel = mesRow
-        ? calcularEstado({ tienePago: Boolean(pagoSel), anio: vistaAnio, mes: vistaMes })
-        : null
+      // El estado del mes (Al día / Pendiente / Vencido) se calcula siempre,
+      // aunque el mes todavía no tenga monto definido: si no hay pago, muestra
+      // "Pendiente" hasta el día 10 y "Vencido" después.
+      const estadoSel = calcularEstado({ tienePago: Boolean(pagoSel), anio: vistaAnio, mes: vistaMes })
       return { depto, estadoSel, pagoSel, mesesAdeudados, deuda }
     })
 
@@ -204,9 +207,12 @@ export default function TablaDeudaComplejo({ editable = false }) {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filas.map((f) => {
-                const enDeuda = f.deuda > 0
+                const enDeuda = f.deuda > 0 || f.estadoSel === 'vencido'
+                const pendiente = !enDeuda && f.estadoSel === 'pendiente'
+                // Rojo = deuda vencida · Ámbar = mes corriente pendiente · Verde = al día
+                const colorFila = enDeuda ? 'bg-red-50' : pendiente ? 'bg-amber-50' : 'bg-green-50'
                 return (
-                  <tr key={f.depto.id} className={enDeuda ? 'bg-red-50' : 'bg-green-50'}>
+                  <tr key={f.depto.id} className={colorFila}>
                     <td className="px-4 py-3 font-medium text-slate-700">{f.depto.nombre}</td>
                     <td className="px-4 py-3">
                       {editable ? (
