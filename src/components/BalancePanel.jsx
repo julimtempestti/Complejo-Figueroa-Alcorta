@@ -1,6 +1,11 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase, MESES_NOMBRE } from '../lib/supabase'
 
+// Saldo del complejo al inicio del período (fondo acumulado de 2025).
+// Tomado del extracto bancario: cierre al 06/01/2026 = $743.327,83.
+// Si en el futuro cambia el punto de partida, ajustá este valor.
+const SALDO_ANTERIOR = 743327.83
+
 // Módulo de Balance del complejo (visible para admin y residentes por igual).
 // Balance = ingresos por expensas + fondo acumulado − egresos.
 //   - Ingresos: pagos recibidos, atribuidos al mes de la expensa.
@@ -68,7 +73,7 @@ export default function BalancePanel() {
     return <div className="py-20 text-center text-slate-400 text-sm">Cargando balance...</div>
   }
 
-  const balance = totalIngresos - totalEgresos
+  const balance = SALDO_ANTERIOR + totalIngresos - totalEgresos
   const fmt = (v) => '$' + Number(v).toLocaleString('es-AR')
 
   // Layout del gráfico de barras (SVG)
@@ -103,6 +108,9 @@ export default function BalancePanel() {
           <p className="text-xs text-white/60 uppercase tracking-wide mb-1">Fondo acumulado</p>
           <p className={`text-2xl font-semibold ${balance < 0 ? 'text-red-300' : 'text-white'}`}>
             {fmt(balance)}
+          </p>
+          <p className="text-[11px] text-white/50 mt-1">
+            Incluye saldo anterior (2025): {fmt(SALDO_ANTERIOR)}
           </p>
         </div>
       </div>
