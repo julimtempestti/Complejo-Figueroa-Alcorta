@@ -18,6 +18,7 @@ export default function BalancePanel() {
   const [totalIngresos, setTotalIngresos] = useState(0)
   const [totalEgresos, setTotalEgresos] = useState(0)
   const [cargando, setCargando] = useState(true)
+  const [mesesVista, setMesesVista] = useState(6) // cuántos meses muestra el gráfico (zoom)
 
   const cargar = useCallback(async () => {
     const [{ data: pagos }, { data: egresos }, { data: mesesData }] = await Promise.all([
@@ -26,12 +27,12 @@ export default function BalancePanel() {
       supabase.from('meses').select('*'),
     ])
 
-    // Buckets de los últimos 6 meses
+    // Buckets de los últimos N meses (según el zoom elegido)
     const hoy = new Date()
     const buckets = []
     let y = hoy.getFullYear()
     let m = hoy.getMonth() + 1
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < mesesVista; i++) {
       buckets.unshift({ anio: y, mes: m, ingresos: 0, egresos: 0 })
       m -= 1
       if (m === 0) { m = 12; y -= 1 }
@@ -57,7 +58,7 @@ export default function BalancePanel() {
     setTotalIngresos((pagos || []).reduce((a, p) => a + Number(p.monto || 0), 0))
     setTotalEgresos((egresos || []).reduce((a, e) => a + Number(e.monto || 0), 0))
     setCargando(false)
-  }, [])
+  }, [mesesVista])
 
   useEffect(() => {
     cargar()
@@ -85,8 +86,11 @@ export default function BalancePanel() {
   const plotH = H - padTop - padBottom
   const baseY = padTop + plotH
   const max = Math.max(1, ...meses.map((d) => Math.max(d.ingresos, d.egresos)))
-  const groupW = (W - padX * 2) / meses.length
-  const barW = Math.min(28, groupW * 0.3)
+  const groupW = (W - padX * 2) / Math.max(1, meses.length)
+  const barW = Math.max(3, Math.min(28, groupW * 0.32))
+  // Con muchos meses, mostramos una etiqueta cada N para que no se amontonen.
+  const labelStep = meses.length > 18 ? 3 : meses.length > 10 ? 2 : 1
+  const labelSize = meses.length > 12 ? 10 : 12
 
   return (
     <section>
@@ -104,12 +108,14 @@ export default function BalancePanel() {
           <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Egresos totales</p>
           <p className="text-2xl font-semibold text-red-600">{fmt(totalEgresos)}</p>
         </div>
-        <div className="bg-tinta text-white rounded-2xl p-5">
-          <p className="text-xs text-white/60 uppercase tracking-wide mb-1">Fondo acumulado</p>
-          <p className={`text-2xl font-semibold ${balance < 0 ? 'text-red-300' : 'text-white'}`}>
+        <div className={`rounded-2xl p-5 border ${balance >= 0 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+          <p className={`text-xs uppercase tracking-wide mb-1 ${balance >= 0 ? 'text-green-700/70' : 'text-red-700/70'}`}>
+            Fondo acumulado
+          </p>
+          <p className={`text-2xl font-semibold ${balance >= 0 ? 'text-green-700' : 'text-red-600'}`}>
             {fmt(balance)}
           </p>
-          <p className="text-[11px] text-white/50 mt-1">
+          <p className={`text-[11px] mt-1 ${balance >= 0 ? 'text-green-700/60' : 'text-red-700/60'}`}>
             Incluye saldo anterior (2025): {fmt(SALDO_ANTERIOR)}
           </p>
         </div>
@@ -118,15 +124,30 @@ export default function BalancePanel() {
       <div className="bg-white border border-tinta/10 rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <h3 className="text-sm font-semibold text-slate-600">Ingresos vs egresos por mes</h3>
-          <div className="flex gap-4 text-xs text-slate-500">
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-sm inline-block" style={{ background: '#16a34a' }} />
-              Ingresos
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-sm inline-block" style={{ background: '#dc2626' }} />
-              Egresos
-            </span>
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex gap-0.5 bg-slate-100 rounded-lg p-0.5">
+              {[6, 12, 24].map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setMesesVista(n)}
+                  className={`text-xs font-medium px-2.5 py-1 rounded-md transition ${
+                    mesesVista === n ? 'bg-white text-tinta shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  {n === 24 ? '2 años' : `${n} meses`}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-4 text-xs text-slate-500">
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded-sm inline-block" style={{ background: '#16a34a' }} />
+                Ingresos
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded-sm inline-block" style={{ background: '#dc2626' }} />
+                Egresos
+              </span>
+            </div>
           </div>
         </div>
 
@@ -139,15 +160,17 @@ export default function BalancePanel() {
             const etiqueta = `${MESES_NOMBRE[d.mes - 1].slice(0, 3)} ${String(d.anio).slice(2)}`
             return (
               <g key={`${d.anio}-${d.mes}`}>
-                <rect x={cx - barW - 3} y={baseY - hi} width={barW} height={hi} rx="2" fill="#16a34a">
+                <rect x={cx - barW - 2} y={baseY - hi} width={barW} height={hi} rx="2" fill="#16a34a">
                   <title>{`Ingresos ${etiqueta}: ${fmt(d.ingresos)}`}</title>
                 </rect>
-                <rect x={cx + 3} y={baseY - he} width={barW} height={he} rx="2" fill="#dc2626">
+                <rect x={cx + 2} y={baseY - he} width={barW} height={he} rx="2" fill="#dc2626">
                   <title>{`Egresos ${etiqueta}: ${fmt(d.egresos)}`}</title>
                 </rect>
-                <text x={cx} y={H - 18} textAnchor="middle" fontSize="12" fill="#94a3b8">
-                  {etiqueta}
-                </text>
+                {(meses.length - 1 - i) % labelStep === 0 && (
+                  <text x={cx} y={H - 18} textAnchor="middle" fontSize={labelSize} fill="#94a3b8">
+                    {etiqueta}
+                  </text>
+                )}
               </g>
             )
           })}
