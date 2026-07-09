@@ -296,12 +296,23 @@ export default function ExtraordinariasPanel({ editable = false, miDeptoId = nul
               >
                 <div className="min-w-0">
                   <h3 className="font-serif text-xl text-tinta">{extra.razon}</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
+                  <p className="text-sm text-slate-500 mt-0.5">
                     {todas ? 'Afecta a todas las unidades' : `Afecta a ${afectados.length} unidades`} · Cuota:
                     {' '}${Number(cuota).toLocaleString('es-AR')} · {pagados}/{afectados.length} al día
                   </p>
                 </div>
-                <span className={`text-slate-400 mt-1 transition-transform ${abierta ? 'rotate-180' : ''}`}>▾</span>
+                <span className="flex items-center gap-2 shrink-0">
+                  <span className="hidden sm:inline text-sm font-medium text-slate-500">
+                    {abierta ? 'Ocultar' : 'Ver detalle'}
+                  </span>
+                  <span
+                    className={`w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-tinta transition-transform ${abierta ? 'rotate-180' : ''}`}
+                  >
+                    <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M6 9l6 6 6-6" />
+                    </svg>
+                  </span>
+                </span>
               </button>
 
               {editable && (
