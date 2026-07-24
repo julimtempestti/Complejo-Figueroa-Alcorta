@@ -26,6 +26,10 @@ export default function AdminPanel() {
   const [cfgMes, setCfgMes] = useState(() => mesActual().mes)
   const [cfgMonto, setCfgMonto] = useState('')
   const [guardandoCfg, setGuardandoCfg] = useState(false)
+  // Configuración de interés por morosidad
+  const [interesActivo, setInteresActivo] = useState(false)
+  const [interesDiario, setInteresDiario] = useState('')
+  const [guardandoInteres, setGuardandoInteres] = useState(false)
   const [morosos, setMorosos] = useState([])
   const [historial, setHistorial] = useState([])
   const [filtroDepto, setFiltroDepto] = useState('')
@@ -178,6 +182,35 @@ export default function AdminPanel() {
     }
     cargarMontoCfg()
   }, [cfgAnio, cfgMes])
+
+  // Cargar la configuración de interés por morosidad
+  useEffect(() => {
+    async function cargarInteres() {
+      const { data } = await supabase.from('configuracion').select('clave, valor')
+      const cfg = {}
+      for (const r of data || []) cfg[r.clave] = r.valor
+      setInteresActivo(cfg.interes_activo === 'true')
+      setInteresDiario(cfg.interes_diario != null ? String(cfg.interes_diario) : '')
+    }
+    cargarInteres()
+  }, [])
+
+  async function guardarInteres(activoNuevo, diarioNuevo) {
+    setGuardandoInteres(true)
+    const { error } = await supabase.from('configuracion').upsert(
+      [
+        { clave: 'interes_activo', valor: activoNuevo ? 'true' : 'false' },
+        { clave: 'interes_diario', valor: String(Number(diarioNuevo) || 0) },
+      ],
+      { onConflict: 'clave' },
+    )
+    setGuardandoInteres(false)
+    if (error) {
+      toast.error('No se pudo guardar la configuración')
+      return
+    }
+    toast.success('Configuración de morosidad guardada')
+  }
 
   async function guardarMontoPeriodo(e) {
     e.preventDefault()
@@ -382,7 +415,8 @@ export default function AdminPanel() {
         <TablaDeudaComplejo editable />
       </section>
 
-      <section className="bg-white border border-slate-100 rounded-2xl p-6 max-w-lg">
+      <div className="flex flex-col lg:flex-row gap-4 items-stretch">
+      <section className="bg-white border border-slate-100 rounded-2xl p-6 flex-1">
         <h3 className="text-sm font-semibold text-slate-600 mb-1">Monto de expensas por período</h3>
         <p className="text-xs text-slate-400 mb-3">
           Definí o editá el valor de la expensa común para cualquier mes (pasado, presente o futuro).
@@ -428,6 +462,51 @@ export default function AdminPanel() {
           </button>
         </form>
       </section>
+
+      <section className="bg-white border border-slate-100 rounded-2xl p-6 flex-1">
+        <h3 className="text-sm font-semibold text-slate-600 mb-1">Interés por morosidad</h3>
+        <p className="text-xs text-slate-400 mb-4">
+          Si está activo, se suma un interés diario sobre cada cuota impaga (vencida). Se muestra en la columna "Intereses" de la tabla.
+        </p>
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            type="button"
+            onClick={() => setInteresActivo((v) => !v)}
+            aria-pressed={interesActivo}
+            className={`relative inline-flex h-7 w-12 items-center rounded-full transition ${interesActivo ? 'bg-green-500' : 'bg-slate-300'}`}
+          >
+            <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${interesActivo ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
+          <span className={`text-sm font-semibold ${interesActivo ? 'text-green-700' : 'text-slate-500'}`}>
+            {interesActivo ? 'Activa' : 'Inactiva'}
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-3 items-end">
+          <div className="flex-1 min-w-[140px]">
+            <label className="block text-xs font-medium text-slate-500 mb-1">Interés diario (%)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={interesDiario}
+              onChange={(e) => setInteresDiario(e.target.value)}
+              placeholder="Ej: 0.1"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => guardarInteres(interesActivo, interesDiario)}
+            disabled={guardandoInteres}
+            className="bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white text-sm font-medium px-4 py-2.5 rounded-lg"
+          >
+            Guardar
+          </button>
+        </div>
+        <p className="text-[11px] text-slate-400 mt-2">
+          Ej: 0,1% por día. Sobre una cuota de $45.000, son ~$45 por cada día de atraso.
+        </p>
+      </section>
+      </div>
 
       <section>
         <h3 className="text-sm font-semibold text-slate-600 mb-3">Estado general del complejo</h3>

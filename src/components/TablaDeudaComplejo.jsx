@@ -23,20 +23,33 @@ export default function TablaDeudaComplejo({ editable = false }) {
   const [mesSelRow, setMesSelRow] = useState(null)
   const [cargando, setCargando] = useState(true)
   const [guardando, setGuardando] = useState(null)
+  const [interesActivo, setInteresActivo] = useState(false)
+  const [tasaDiaria, setTasaDiaria] = useState(0)
 
   const cargar = useCallback(async () => {
-    const [{ data: deptos }, { data: todosMeses }, { data: todosPagos }] = await Promise.all([
+    const [{ data: deptos }, { data: todosMeses }, { data: todosPagos }, { data: config }] = await Promise.all([
       supabase.from('departamentos').select('*').order('id'),
       supabase.from('meses').select('*').order('anio').order('mes'),
       supabase.from('pagos').select('*'),
+      supabase.from('configuracion').select('clave, valor'),
     ])
+
+    // Config de interés por morosidad
+    const cfg = {}
+    for (const r of config || []) cfg[r.clave] = r.valor
+    const activo = cfg.interes_activo === 'true'
+    const tasa = Number(cfg.interes_diario || 0)
+    setInteresActivo(activo)
+    setTasaDiaria(tasa)
 
     const mesRow = (todosMeses || []).find((m) => m.anio === vistaAnio && m.mes === vistaMes) || null
     setMesSelRow(mesRow)
 
     // Un mes está "facturado" (exigible) si ya pasó, o si es el mes corriente y
     // ya pasó el día 10 (antes del 10 NO cuenta como deuda).
-    const hoyDia = new Date().getDate()
+    const hoy = new Date()
+    const hoyDia = hoy.getDate()
+    const hoyMs = hoy.getTime()
     const esFacturado = (m) =>
       m.anio < anioHoy ||
       (m.anio === anioHoy && m.mes < mesHoy) ||
@@ -46,13 +59,22 @@ export default function TablaDeudaComplejo({ editable = false }) {
       const pagosDepto = (todosPagos || []).filter((p) => p.depto_id === depto.id)
       const pagadoTotal = pagosDepto.reduce((a, p) => a + Number(p.monto || 0), 0)
 
-      // Total facturado (exigible) hasta hoy y meses sin pago registrado.
+      // Total facturado (exigible) hasta hoy, meses sin pago e interés por mora.
       let facturado = 0
       let mesesAdeudados = 0
+      let interes = 0
       for (const m of todosMeses || []) {
         if (!esFacturado(m)) continue
         facturado += Number(m.monto_expensa || 0)
-        if (!pagosDepto.find((p) => p.mes_id === m.id)) mesesAdeudados += 1
+        if (!pagosDepto.find((p) => p.mes_id === m.id)) {
+          mesesAdeudados += 1
+          // Interés diario sobre la cuota impaga, desde su vencimiento (día 10).
+          if (activo && tasa > 0) {
+            const venc = new Date(m.anio, m.mes - 1, 10).getTime()
+            const dias = Math.max(0, Math.floor((hoyMs - venc) / 86400000))
+            interes += Number(m.monto_expensa || 0) * (tasa / 100) * dias
+          }
+        }
       }
 
       // Cuenta corriente del depto: pagado − facturado.
@@ -64,7 +86,7 @@ export default function TablaDeudaComplejo({ editable = false }) {
       const pagoSel = mesRow ? pagosDepto.find((p) => p.mes_id === mesRow.id) || null : null
       const estadoSel = calcularEstado({ tienePago: Boolean(pagoSel), anio: vistaAnio, mes: vistaMes })
 
-      return { depto, estadoSel, pagoSel, mesesAdeudados, saldoCuenta }
+      return { depto, estadoSel, pagoSel, mesesAdeudados, saldoCuenta, interes: Math.round(interes) }
     })
 
     setFilas(resultado)
@@ -78,6 +100,7 @@ export default function TablaDeudaComplejo({ editable = false }) {
       .channel('deuda-complejo-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pagos' }, () => cargar())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'meses' }, () => cargar())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'configuracion' }, () => cargar())
       .subscribe()
     return () => supabase.removeChannel(canal)
   }, [cargar])
@@ -169,8 +192,11 @@ export default function TablaDeudaComplejo({ editable = false }) {
     return <span className="inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-amber-100 text-amber-700">Pendiente</span>
   }
 
-  const totalAdeudado = filas.reduce((a, f) => a + (f.saldoCuenta < 0 ? -f.saldoCuenta : 0), 0)
+  // La deuda total de un depto incluye el interés por mora (si está activo).
+  const deudaConInteres = (f) => (f.saldoCuenta < 0 ? -f.saldoCuenta : 0) + f.interes
+  const totalAdeudado = filas.reduce((a, f) => a + deudaConInteres(f), 0)
   const totalAFavor = filas.reduce((a, f) => a + (f.saldoCuenta > 0 ? f.saldoCuenta : 0), 0)
+  const totalInteres = filas.reduce((a, f) => a + f.interes, 0)
 
   return (
     <div>
@@ -212,6 +238,7 @@ export default function TablaDeudaComplejo({ editable = false }) {
                 <th className="px-4 py-3 font-medium">Depto</th>
                 <th className="px-4 py-3 font-medium">Estado ({nombreMes(vistaMes, vistaAnio)})</th>
                 <th className="px-4 py-3 font-medium">Morosidad</th>
+                <th className="px-4 py-3 font-medium text-right">Intereses</th>
                 <th className="px-4 py-3 font-medium text-right">Saldo de cuenta</th>
               </tr>
             </thead>
@@ -252,8 +279,15 @@ export default function TablaDeudaComplejo({ editable = false }) {
                       )}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap font-medium">
+                      {f.interes > 0 ? (
+                        <span className="text-amber-600">+${f.interes.toLocaleString('es-AR')}</span>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap font-medium">
                       {debe ? (
-                        <span className="text-red-600">Debe ${Math.abs(f.saldoCuenta).toLocaleString('es-AR')}</span>
+                        <span className="text-red-600">Debe ${deudaConInteres(f).toLocaleString('es-AR')}</span>
                       ) : aFavor ? (
                         <span className="text-green-600">A favor ${f.saldoCuenta.toLocaleString('es-AR')}</span>
                       ) : (
@@ -273,6 +307,9 @@ export default function TablaDeudaComplejo({ editable = false }) {
                       (a favor: ${totalAFavor.toLocaleString('es-AR')})
                     </span>
                   )}
+                </td>
+                <td className="px-4 py-3 text-right whitespace-nowrap text-amber-600">
+                  {totalInteres > 0 ? `+$${totalInteres.toLocaleString('es-AR')}` : ''}
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap text-red-600">
                   ${totalAdeudado.toLocaleString('es-AR')}
