@@ -59,34 +59,45 @@ export default function TablaDeudaComplejo({ editable = false }) {
       const pagosDepto = (todosPagos || []).filter((p) => p.depto_id === depto.id)
       const pagadoTotal = pagosDepto.reduce((a, p) => a + Number(p.monto || 0), 0)
 
-      // Total facturado (exigible) hasta hoy, meses sin pago e interés por mora.
+      // Por cada mes exigible calculamos el faltante = cuota − lo pagado ESE mes
+      // (así un pago parcial también genera deuda e interés, y los duplicados de
+      // un mes no tapan la falta de otro).
       let facturado = 0
       let mesesAdeudados = 0
-      let interes = 0
+      let interesBruto = 0
       for (const m of todosMeses || []) {
         if (!esFacturado(m)) continue
-        facturado += Number(m.monto_expensa || 0)
-        if (!pagosDepto.find((p) => p.mes_id === m.id)) {
+        const cuota = Number(m.monto_expensa || 0)
+        facturado += cuota
+        const pagadoMes = pagosDepto
+          .filter((p) => p.mes_id === m.id)
+          .reduce((a, p) => a + Number(p.monto || 0), 0)
+        const faltante = Math.max(0, cuota - pagadoMes)
+        if (faltante > 0) {
           mesesAdeudados += 1
-          // Interés diario sobre la cuota impaga, desde su vencimiento (día 10).
+          // Interés diario sobre el faltante, desde el vencimiento (día 10).
           if (activo && tasa > 0) {
             const venc = new Date(m.anio, m.mes - 1, 10).getTime()
             const dias = Math.max(0, Math.floor((hoyMs - venc) / 86400000))
-            interes += Number(m.monto_expensa || 0) * (tasa / 100) * dias
+            interesBruto += faltante * (tasa / 100) * dias
           }
         }
       }
 
-      // Cuenta corriente del depto: pagado − facturado.
-      //   > 0  saldo a favor (pagó de más)
-      //   < 0  debe (le falta para estar al día)
+      // Cuenta corriente del depto: pagado − facturado (neto, con adelantos y
+      // pagos de más). > 0 a favor · < 0 debe.
       const saldoCuenta = pagadoTotal - facturado
+      // El interés solo se cobra si el depto está en deuda NETA (si tiene saldo
+      // a favor que cubre lo que falta, no corresponde interés).
+      const interes = saldoCuenta < 0 ? Math.round(interesBruto) : 0
 
       // Estado del mes seleccionado en el navegador (Al día / Pendiente / Vencido).
       const pagoSel = mesRow ? pagosDepto.find((p) => p.mes_id === mesRow.id) || null : null
       const estadoSel = calcularEstado({ tienePago: Boolean(pagoSel), anio: vistaAnio, mes: vistaMes })
 
-      return { depto, estadoSel, pagoSel, mesesAdeudados, saldoCuenta, interes: Math.round(interes) }
+      // La morosidad se muestra solo si el depto está en deuda neta: si tiene
+      // saldo a favor, ese crédito cubre los meses con faltante (no es moroso).
+      return { depto, estadoSel, pagoSel, mesesAdeudados: saldoCuenta < 0 ? mesesAdeudados : 0, saldoCuenta, interes }
     })
 
     setFilas(resultado)

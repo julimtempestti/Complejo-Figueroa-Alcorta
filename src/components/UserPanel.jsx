@@ -14,6 +14,7 @@ export default function UserPanel({ departamento }) {
   const [historial, setHistorial] = useState([])
   const [mesesAdeudados, setMesesAdeudados] = useState(0)
   const [saldoCuenta, setSaldoCuenta] = useState(0) // pagado − facturado (>0 a favor, <0 debe)
+  const [interesResidente, setInteresResidente] = useState(0) // interés por mora (si está activo y debe)
   const [cargando, setCargando] = useState(true)
   const [modalTransferenciaAbierto, setModalTransferenciaAbierto] = useState(false)
   const [modulo, setModulo] = useState('expensas') // 'expensas' | 'gastos' | 'balance' | 'reclamos'
@@ -43,28 +44,47 @@ export default function UserPanel({ departamento }) {
       : null
     setPagoActual(pagoMesActual)
 
-    // Deuda acumulada del propio depto (meses anteriores sin pago)
-    const { data: todosMeses } = await supabase
-      .from('meses')
-      .select('*')
-      .order('anio')
-      .order('mes')
+    // Meses + configuración de interés por mora
+    const [{ data: todosMeses }, { data: config }] = await Promise.all([
+      supabase.from('meses').select('*').order('anio').order('mes'),
+      supabase.from('configuracion').select('clave, valor'),
+    ])
+    const cfg = {}
+    for (const r of config || []) cfg[r.clave] = r.valor
+    const interesActivo = cfg.interes_activo === 'true'
+    const tasa = Number(cfg.interes_diario || 0)
 
     // Cuenta corriente del depto: pagado − facturado (exigible hasta hoy).
-    const hoyDia = new Date().getDate()
+    // El faltante por mes contempla los pagos parciales, igual que el admin.
+    const hoy = new Date()
+    const hoyDia = hoy.getDate()
+    const hoyMs = hoy.getTime()
     const esFacturado = (m) =>
       m.anio < anio || (m.anio === anio && m.mes < mes) || (m.anio === anio && m.mes === mes && hoyDia > 10)
 
     let pendientes = 0
     let facturado = 0
+    let interesBruto = 0
     for (const m of todosMeses || []) {
       if (!esFacturado(m)) continue
-      facturado += Number(m.monto_expensa || 0)
-      if (!pagosDepto?.find((p) => p.mes_id === m.id)) pendientes += 1
+      const cuota = Number(m.monto_expensa || 0)
+      facturado += cuota
+      const pagadoMes = (pagosDepto || []).filter((p) => p.mes_id === m.id).reduce((a, p) => a + Number(p.monto || 0), 0)
+      const faltante = Math.max(0, cuota - pagadoMes)
+      if (faltante > 0) {
+        pendientes += 1
+        if (interesActivo && tasa > 0) {
+          const venc = new Date(m.anio, m.mes - 1, 10).getTime()
+          const dias = Math.max(0, Math.floor((hoyMs - venc) / 86400000))
+          interesBruto += faltante * (tasa / 100) * dias
+        }
+      }
     }
     const pagadoTotal = (pagosDepto || []).reduce((a, p) => a + Number(p.monto || 0), 0)
+    const saldo = pagadoTotal - facturado
     setMesesAdeudados(pendientes)
-    setSaldoCuenta(pagadoTotal - facturado)
+    setSaldoCuenta(saldo)
+    setInteresResidente(saldo < 0 ? Math.round(interesBruto) : 0)
 
     setCargando(false)
   }, [departamento.id])
@@ -161,11 +181,12 @@ export default function UserPanel({ departamento }) {
                 <span className="text-2xl">⚠️</span>
                 <div>
                   <p className="text-sm font-semibold text-red-700">
-                    Debés ${Math.abs(saldoCuenta).toLocaleString('es-AR')}
+                    Debés ${(Math.abs(saldoCuenta) + interesResidente).toLocaleString('es-AR')}
                   </p>
                   <p className="text-xs text-red-600/80">
                     Es lo que te falta para estar al día
-                    {mesesAdeudados > 0 && ` (${mesesAdeudados} ${mesesAdeudados === 1 ? 'mes' : 'meses'} sin pagar)`}.
+                    {mesesAdeudados > 0 && ` (${mesesAdeudados} ${mesesAdeudados === 1 ? 'mes' : 'meses'} sin pagar)`}
+                    {interesResidente > 0 && `, incluye $${interesResidente.toLocaleString('es-AR')} de interés por mora`}.
                     Por favor regularizá tu situación.
                   </p>
                 </div>
