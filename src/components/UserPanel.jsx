@@ -13,7 +13,8 @@ export default function UserPanel({ departamento }) {
   const [pagoActual, setPagoActual] = useState(null)
   const [historial, setHistorial] = useState([])
   const [mesesAdeudados, setMesesAdeudados] = useState(0)
-  const [saldoCuenta, setSaldoCuenta] = useState(0) // pagado − facturado (>0 a favor, <0 debe)
+  const [deudaResidente, setDeudaResidente] = useState(0) // deuda vencida (capital)
+  const [aFavorResidente, setAFavorResidente] = useState(0) // adelantos + sobrepagos
   const [interesResidente, setInteresResidente] = useState(0) // interés por mora (si está activo y debe)
   const [cargando, setCargando] = useState(true)
   const [modalTransferenciaAbierto, setModalTransferenciaAbierto] = useState(false)
@@ -64,6 +65,7 @@ export default function UserPanel({ departamento }) {
 
     let pendientes = 0
     let facturado = 0
+    let deudaVencida = 0
     let interesBruto = 0
     for (const m of todosMeses || []) {
       if (!esFacturado(m)) continue
@@ -75,6 +77,7 @@ export default function UserPanel({ departamento }) {
       const faltante = Math.max(0, cuota - pagadoMes)
       if (faltante > 0) {
         pendientes += 1
+        deudaVencida += faltante
         if (interesActivo && tasa > 0) {
           const venc = new Date(m.anio, m.mes - 1, 10).getTime()
           const dias = Math.max(0, Math.floor((hoyMs - venc) / 86400000))
@@ -83,10 +86,13 @@ export default function UserPanel({ departamento }) {
       }
     }
     const pagadoTotal = (pagosDepto || []).reduce((a, p) => a + Number(p.monto || 0), 0)
-    const saldo = pagadoTotal - facturado
+    // Deuda vencida y saldo a favor por separado: un adelanto futuro o un
+    // sobrepago no cancela una cuota vencida (F-05).
+    const saldoAFavor = Math.max(0, pagadoTotal - facturado + deudaVencida)
     setMesesAdeudados(pendientes)
-    setSaldoCuenta(saldo)
-    setInteresResidente(saldo < 0 ? Math.round(interesBruto) : 0)
+    setDeudaResidente(deudaVencida)
+    setAFavorResidente(saldoAFavor)
+    setInteresResidente(Math.round(interesBruto)) // interés sobre lo vencido (F-06)
 
     setCargando(false)
   }, [departamento.id])
@@ -178,30 +184,31 @@ export default function UserPanel({ departamento }) {
       <div className="flex-1 min-w-0">
         {modulo === 'expensas' && (
           <div className="space-y-8">
-            {saldoCuenta < 0 ? (
+            {deudaResidente > 0 ? (
               <div className="bg-red-50 border border-red-200 rounded-2xl px-5 py-4 flex items-center gap-3">
                 <span className="text-2xl">⚠️</span>
                 <div>
                   <p className="text-sm font-semibold text-red-700">
-                    Debés ${(Math.abs(saldoCuenta) + interesResidente).toLocaleString('es-AR')}
+                    Debés ${(deudaResidente + interesResidente).toLocaleString('es-AR')}
                   </p>
                   <p className="text-xs text-red-600/80">
                     Es lo que te falta para estar al día
                     {mesesAdeudados > 0 && ` (${mesesAdeudados} ${mesesAdeudados === 1 ? 'mes' : 'meses'} sin pagar)`}
                     {interesResidente > 0 && `, incluye $${interesResidente.toLocaleString('es-AR')} de interés por mora`}.
                     Por favor regularizá tu situación.
+                    {aFavorResidente > 0 && ` Tenés $${aFavorResidente.toLocaleString('es-AR')} a favor (adelanto), pero no alcanza a cubrir las cuotas vencidas.`}
                   </p>
                 </div>
               </div>
-            ) : saldoCuenta > 0 ? (
+            ) : aFavorResidente > 0 ? (
               <div className="bg-green-50 border border-green-200 rounded-2xl px-5 py-4 flex items-center gap-3">
                 <span className="text-2xl">💚</span>
                 <div>
                   <p className="text-sm font-semibold text-green-700">
-                    Tenés ${saldoCuenta.toLocaleString('es-AR')} a favor
+                    Tenés ${aFavorResidente.toLocaleString('es-AR')} a favor
                   </p>
                   <p className="text-xs text-green-600/80">
-                    Pagaste de más: ese saldo queda a tu favor para los próximos meses.
+                    Pagaste de más o adelantaste: ese saldo queda a tu favor para los próximos meses.
                   </p>
                 </div>
               </div>

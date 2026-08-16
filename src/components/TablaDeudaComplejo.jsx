@@ -64,6 +64,7 @@ export default function TablaDeudaComplejo({ editable = false }) {
       // un mes no tapan la falta de otro).
       let facturado = 0
       let mesesAdeudados = 0
+      let deudaVencida = 0
       let interesBruto = 0
       for (const m of todosMeses || []) {
         if (!esFacturado(m)) continue
@@ -75,7 +76,9 @@ export default function TablaDeudaComplejo({ editable = false }) {
         const faltante = Math.max(0, cuota - pagadoMes)
         if (faltante > 0) {
           mesesAdeudados += 1
-          // Interés diario sobre el faltante, desde el vencimiento (día 10).
+          deudaVencida += faltante
+          // Interés diario sobre el faltante de ESTE mes, por sus días de atraso
+          // desde el vencimiento (día 10). No depende del neto global (F-06).
           if (activo && tasa > 0) {
             const venc = new Date(m.anio, m.mes - 1, 10).getTime()
             const dias = Math.max(0, Math.floor((hoyMs - venc) / 86400000))
@@ -84,20 +87,20 @@ export default function TablaDeudaComplejo({ editable = false }) {
         }
       }
 
-      // Cuenta corriente del depto: pagado − facturado (neto, con adelantos y
-      // pagos de más). > 0 a favor · < 0 debe.
-      const saldoCuenta = pagadoTotal - facturado
-      // El interés solo se cobra si el depto está en deuda NETA (si tiene saldo
-      // a favor que cubre lo que falta, no corresponde interés).
-      const interes = saldoCuenta < 0 ? Math.round(interesBruto) : 0
+      // Deuda vencida y saldo a favor se llevan por SEPARADO: un adelanto a un
+      // mes futuro (o un sobrepago) NO cancela una cuota ya vencida (F-05).
+      //   deudaVencida = lo que falta de las cuotas exigibles.
+      //   saldoAFavor  = todo lo pagado por encima de cubrir esas cuotas
+      //                  (adelantos a meses futuros + sobrepagos).
+      const saldoAFavor = Math.max(0, pagadoTotal - facturado + deudaVencida)
+      // Interés sobre lo realmente adeudado de cada mes vencido (F-06).
+      const interes = Math.round(interesBruto)
 
       // Estado del mes seleccionado en el navegador (Al día / Pendiente / Vencido).
       const pagoSel = mesRow ? pagosDepto.find((p) => p.mes_id === mesRow.id) || null : null
       const estadoSel = calcularEstado({ tienePago: Boolean(pagoSel), anio: vistaAnio, mes: vistaMes })
 
-      // La morosidad se muestra solo si el depto está en deuda neta: si tiene
-      // saldo a favor, ese crédito cubre los meses con faltante (no es moroso).
-      return { depto, estadoSel, pagoSel, mesesAdeudados: saldoCuenta < 0 ? mesesAdeudados : 0, saldoCuenta, interes }
+      return { depto, estadoSel, pagoSel, mesesAdeudados, deudaVencida, saldoAFavor, interes }
     })
 
     setFilas(resultado)
@@ -207,9 +210,9 @@ export default function TablaDeudaComplejo({ editable = false }) {
   }
 
   // La deuda total de un depto incluye el interés por mora (si está activo).
-  const deudaConInteres = (f) => (f.saldoCuenta < 0 ? -f.saldoCuenta : 0) + f.interes
+  const deudaConInteres = (f) => f.deudaVencida + f.interes
   const totalAdeudado = filas.reduce((a, f) => a + deudaConInteres(f), 0)
-  const totalAFavor = filas.reduce((a, f) => a + (f.saldoCuenta > 0 ? f.saldoCuenta : 0), 0)
+  const totalAFavor = filas.reduce((a, f) => a + f.saldoAFavor, 0)
   const totalInteres = filas.reduce((a, f) => a + f.interes, 0)
 
   return (
@@ -258,12 +261,12 @@ export default function TablaDeudaComplejo({ editable = false }) {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filas.map((f) => {
-                const debe = f.saldoCuenta < 0
-                const aFavor = f.saldoCuenta > 0
+                const debe = f.deudaVencida > 0
+                const aFavor = !debe && f.saldoAFavor > 0
                 // Rojo = debe · Ámbar = al día pero falta el mes corriente · Verde = al día / a favor
                 const colorFila = debe
                   ? 'bg-red-50'
-                  : f.saldoCuenta === 0 && f.estadoSel === 'pendiente'
+                  : f.saldoAFavor === 0 && f.estadoSel === 'pendiente'
                     ? 'bg-amber-50'
                     : 'bg-green-50'
                 return (
@@ -301,9 +304,16 @@ export default function TablaDeudaComplejo({ editable = false }) {
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap font-medium">
                       {debe ? (
-                        <span className="text-red-600">Debe ${deudaConInteres(f).toLocaleString('es-AR')}</span>
+                        <div>
+                          <span className="text-red-600">Debe ${deudaConInteres(f).toLocaleString('es-AR')}</span>
+                          {f.saldoAFavor > 0 && (
+                            <span className="block text-[11px] text-green-600 font-normal">
+                              ${f.saldoAFavor.toLocaleString('es-AR')} a favor (adelanto)
+                            </span>
+                          )}
+                        </div>
                       ) : aFavor ? (
-                        <span className="text-green-600">A favor ${f.saldoCuenta.toLocaleString('es-AR')}</span>
+                        <span className="text-green-600">A favor ${f.saldoAFavor.toLocaleString('es-AR')}</span>
                       ) : (
                         <span className="text-green-600">Al día</span>
                       )}
