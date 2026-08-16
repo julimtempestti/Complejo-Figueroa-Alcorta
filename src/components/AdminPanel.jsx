@@ -32,6 +32,8 @@ export default function AdminPanel() {
   const [historial, setHistorial] = useState([])
   const [filtroDepto, setFiltroDepto] = useState('')
   const [filtroPeriodo, setFiltroPeriodo] = useState('todos') // "Todos los meses" por defecto
+  const [ordenCampo, setOrdenCampo] = useState('fecha') // columna por la que se ordena
+  const [ordenAsc, setOrdenAsc] = useState(false) // fecha descendente por defecto
   const [modalAbierto, setModalAbierto] = useState(false)
   const [cargando, setCargando] = useState(true)
   const [modulo, setModulo] = useState('pagos') // 'pagos' | 'transferencias' | 'residentes' | 'propietarios' | 'egresos' | 'extraordinarias' | 'balance' | 'reclamos' | 'usuarios'
@@ -235,6 +237,43 @@ export default function AdminPanel() {
 
   if (cargando) {
     return <div className="py-20 text-center text-slate-400 text-sm">Cargando panel de administración...</div>
+  }
+
+  // Ordenamiento del historial según la columna elegida (clic en el encabezado).
+  function valorOrden(p, campo) {
+    switch (campo) {
+      case 'depto': return p.departamentos?.id ?? p.depto_id ?? 0
+      case 'mes': return p.meses ? p.meses.anio * 12 + p.meses.mes : 0
+      case 'monto': return Number(p.monto || 0)
+      case 'fecha':
+      default: return new Date(p.fecha_pago).getTime() || 0
+    }
+  }
+  const historialOrdenado = [...historial].sort((a, b) => {
+    const va = valorOrden(a, ordenCampo)
+    const vb = valorOrden(b, ordenCampo)
+    if (va < vb) return ordenAsc ? -1 : 1
+    if (va > vb) return ordenAsc ? 1 : -1
+    return 0
+  })
+  function ordenarPor(campo) {
+    if (ordenCampo === campo) setOrdenAsc((v) => !v)
+    else { setOrdenCampo(campo); setOrdenAsc(true) } // nueva columna: menor a mayor
+  }
+  function ThOrden({ campo, children, alinear = 'left' }) {
+    const activo = ordenCampo === campo
+    return (
+      <th className={`px-4 py-3 font-medium ${alinear === 'right' ? 'text-right' : 'text-left'}`}>
+        <button
+          onClick={() => ordenarPor(campo)}
+          className={`inline-flex items-center gap-1 hover:text-slate-700 transition ${activo ? 'text-slate-700' : ''}`}
+          title="Ordenar por esta columna"
+        >
+          {children}
+          <span className="text-[10px]">{activo ? (ordenAsc ? '▲' : '▼') : '↕'}</span>
+        </button>
+      </th>
+    )
   }
 
   return (
@@ -525,30 +564,28 @@ export default function AdminPanel() {
           <table className="min-w-full text-sm">
             <thead>
               <tr className="bg-slate-50 text-slate-500 text-left">
-                <th className="px-4 py-3 font-medium">Depto</th>
-                <th className="px-4 py-3 font-medium">Mes</th>
-                <th className="px-4 py-3 font-medium">Fecha</th>
-                <th className="px-4 py-3 font-medium">Método</th>
-                <th className="px-4 py-3 font-medium">Estado</th>
-                <th className="px-4 py-3 font-medium">Registrado por</th>
+                <ThOrden campo="depto">Depto</ThOrden>
+                <ThOrden campo="mes">Mes</ThOrden>
+                <ThOrden campo="fecha">Fecha</ThOrden>
+                <ThOrden campo="monto" alinear="right">Monto</ThOrden>
                 <th className="px-4 py-3 font-medium">Recibo</th>
                 <th className="px-4 py-3 font-medium w-10"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {historial.length === 0 && (
+              {historialOrdenado.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-6 text-center text-slate-400">Sin resultados</td>
+                  <td colSpan={6} className="px-4 py-6 text-center text-slate-400">Sin resultados</td>
                 </tr>
               )}
-              {historial.map((p) => (
+              {historialOrdenado.map((p) => (
                 <tr key={p.id}>
                   <td className="px-4 py-3">{p.departamentos?.nombre}</td>
                   <td className="px-4 py-3">{p.meses ? nombreMes(p.meses.mes, p.meses.anio) : '-'}</td>
                   <td className="px-4 py-3">{fechaCorta(p.fecha_pago)}</td>
-                  <td className="px-4 py-3 capitalize">{p.metodo_pago}</td>
-                  <td className="px-4 py-3 capitalize">{p.estado}</td>
-                  <td className="px-4 py-3 capitalize">{p.registrado_por}</td>
+                  <td className="px-4 py-3 text-right whitespace-nowrap font-medium">
+                    ${Number(p.monto || 0).toLocaleString('es-AR')}
+                  </td>
                   <td className="px-4 py-3">
                     {p.estado === 'pagado' ? (
                       <button
