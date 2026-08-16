@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { supabase, mesActual } from '../lib/supabase'
+import { supabase, mesActual, fechaCorta, nombreMes } from '../lib/supabase'
 
 const METODOS = ['efectivo', 'transferencia', 'otro']
 
@@ -14,6 +14,11 @@ export default function RegisterPaymentModal({ departamentos, deptoIdInicial, on
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
   const [notas, setNotas] = useState('')
   const [enviando, setEnviando] = useState(false)
+  // Cuando ya existe al menos un pago para ese depto+mes, guardamos los
+  // registros existentes acá para pedir confirmación antes de crear otro
+  // (los pagos en cuotas están permitidos, pero avisamos para evitar
+  // duplicados accidentales). null = sin conflicto pendiente.
+  const [duplicados, setDuplicados] = useState(null) // { mesRow, existentes }
 
   useEffect(() => {
     async function precargarMonto() {
@@ -30,14 +35,46 @@ export default function RegisterPaymentModal({ departamentos, deptoIdInicial, on
 
   async function handleSubmit(e) {
     e.preventDefault()
+    if (!monto || Number(monto) <= 0) {
+      toast.error('Ingresá un monto válido')
+      return
+    }
     setEnviando(true)
 
-    let { data: mesRow } = await supabase
+    // Buscamos el período SIN crearlo todavía: si no existe, no puede haber
+    // pagos previos, así que no hay nada que confirmar.
+    const { data: mesRow } = await supabase
       .from('meses')
       .select('*')
       .eq('anio', anioSel)
       .eq('mes', mesSel)
       .maybeSingle()
+
+    if (mesRow) {
+      const { data: existentes } = await supabase
+        .from('pagos')
+        .select('*')
+        .eq('depto_id', Number(deptoId))
+        .eq('mes_id', mesRow.id)
+        .order('fecha_pago', { ascending: false })
+
+      if (existentes && existentes.length > 0) {
+        // Ya hay pago(s) para ese depto+mes: mostramos lo existente y pedimos
+        // confirmación en vez de crear un duplicado a ciegas.
+        setDuplicados({ mesRow, existentes })
+        setEnviando(false)
+        return
+      }
+    }
+
+    await registrar(mesRow)
+  }
+
+  // Inserta el pago (creando el período si hiciera falta). Se llama tanto en el
+  // flujo normal como al confirmar "registrar igual" sobre un pago existente.
+  async function registrar(mesRowExistente) {
+    setEnviando(true)
+    let mesRow = mesRowExistente
 
     if (!mesRow) {
       const { data: nuevoMes, error: errMes } = await supabase
@@ -69,6 +106,7 @@ export default function RegisterPaymentModal({ departamentos, deptoIdInicial, on
       .single()
 
     setEnviando(false)
+    setDuplicados(null)
 
     if (error) {
       toast.error('No se pudo registrar el pago')
@@ -106,7 +144,59 @@ export default function RegisterPaymentModal({ departamentos, deptoIdInicial, on
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center px-4 z-50">
       <div className="bg-white rounded-2xl p-6 w-full max-w-md">
-        <h3 className="text-base font-semibold text-slate-800 mb-4">Registrar pago manual</h3>
+        <h3 className="text-base font-semibold text-slate-800 mb-4">
+          {duplicados ? 'Ya existe un pago para este período' : 'Registrar pago manual'}
+        </h3>
+
+        {duplicados ? (
+          <div className="space-y-4">
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+              <p className="text-sm text-amber-800 font-medium">
+                {departamentos.find((d) => d.id === Number(deptoId))?.nombre || 'Este depto'} ya tiene{' '}
+                {duplicados.existentes.length === 1
+                  ? 'un pago registrado'
+                  : `${duplicados.existentes.length} pagos registrados`}{' '}
+                en {nombreMes(mesSel, anioSel)}:
+              </p>
+              <ul className="mt-2 space-y-1">
+                {duplicados.existentes.map((p) => (
+                  <li key={p.id} className="text-sm text-amber-900 flex justify-between gap-3">
+                    <span>{fechaCorta(p.fecha_pago)} · {p.metodo_pago}</span>
+                    <span className="font-semibold">${Number(p.monto || 0).toLocaleString('es-AR')}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-sm text-amber-800 mt-2 pt-2 border-t border-amber-200">
+                Ya registrado:{' '}
+                <span className="font-semibold">
+                  ${duplicados.existentes.reduce((a, p) => a + Number(p.monto || 0), 0).toLocaleString('es-AR')}
+                </span>
+                {' · '}vas a agregar{' '}
+                <span className="font-semibold">${Number(monto || 0).toLocaleString('es-AR')}</span>
+              </p>
+            </div>
+            <p className="text-sm text-slate-500">
+              Si es un pago en cuotas, podés continuar. Si fue un error, cancelá.
+            </p>
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setDuplicados(null)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium py-2.5 rounded-lg"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={enviando}
+                onClick={() => registrar(duplicados.mesRow)}
+                className="flex-1 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-lg"
+              >
+                {enviando ? 'Guardando...' : 'Registrar igual'}
+              </button>
+            </div>
+          </div>
+        ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-slate-600 mb-1">Departamento</label>
@@ -207,6 +297,7 @@ export default function RegisterPaymentModal({ departamentos, deptoIdInicial, on
             </button>
           </div>
         </form>
+        )}
       </div>
     </div>
   )
