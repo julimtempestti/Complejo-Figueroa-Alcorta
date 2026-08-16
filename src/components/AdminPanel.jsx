@@ -422,7 +422,7 @@ export default function AdminPanel() {
           </button>
         </div>
 
-        <TablaDeudaComplejo editable />
+        <TablaDeudaComplejo />
       </section>
 
       <div className="flex flex-col lg:flex-row gap-4 items-stretch">
