@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { supabase, calcularEstado, mesActual, nombreMes, fechaCorta, cuotaEfectiva } from '../lib/supabase'
+import { supabase, calcularEstado, mesActual, nombreMes, fechaCorta, cuotaEfectiva, partesBA, INICIO_ANIO, INICIO_MES, DIA_VENCIMIENTO } from '../lib/supabase'
 import PaymentStatusCard from './PaymentStatusCard'
 import TablaDeudaComplejo from './TablaDeudaComplejo'
 import InformarTransferenciaModal from './InformarTransferenciaModal'
@@ -57,11 +57,15 @@ export default function UserPanel({ departamento }) {
 
     // Cuenta corriente del depto: pagado − facturado (exigible hasta hoy).
     // El faltante por mes contempla los pagos parciales, igual que el admin.
-    const hoy = new Date()
-    const hoyDia = hoy.getDate()
-    const hoyMs = hoy.getTime()
-    const esFacturado = (m) =>
-      m.anio < anio || (m.anio === anio && m.mes < mes) || (m.anio === anio && m.mes === mes && hoyDia > 10)
+    const hoyDia = partesBA().dia
+    const hoyMs = Date.now()
+    // Exigible solo si no es anterior al inicio de la app (enero 2025) y ya venció.
+    const esFacturado = (m) => {
+      const dentroDeLaHistoria =
+        m.anio > INICIO_ANIO || (m.anio === INICIO_ANIO && m.mes >= INICIO_MES)
+      if (!dentroDeLaHistoria) return false
+      return m.anio < anio || (m.anio === anio && m.mes < mes) || (m.anio === anio && m.mes === mes && hoyDia > DIA_VENCIMIENTO)
+    }
 
     let pendientes = 0
     let facturado = 0

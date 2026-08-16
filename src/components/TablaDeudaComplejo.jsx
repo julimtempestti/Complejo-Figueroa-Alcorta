@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { supabase, calcularEstado, mesActual, nombreMes, INICIO_ANIO, INICIO_MES, insertarPagoConCuota, cuotaEfectiva } from '../lib/supabase'
+import { supabase, calcularEstado, mesActual, nombreMes, INICIO_ANIO, INICIO_MES, DIA_VENCIMIENTO, partesBA, insertarPagoConCuota, cuotaEfectiva } from '../lib/supabase'
 
 function mesAnterior(anio, mes) {
   return mes === 1 ? { anio: anio - 1, mes: 12 } : { anio, mes: mes - 1 }
@@ -47,13 +47,20 @@ export default function TablaDeudaComplejo({ editable = false }) {
 
     // Un mes está "facturado" (exigible) si ya pasó, o si es el mes corriente y
     // ya pasó el día 10 (antes del 10 NO cuenta como deuda).
-    const hoy = new Date()
-    const hoyDia = hoy.getDate()
-    const hoyMs = hoy.getTime()
-    const esFacturado = (m) =>
-      m.anio < anioHoy ||
-      (m.anio === anioHoy && m.mes < mesHoy) ||
-      (m.anio === anioHoy && m.mes === mesHoy && hoyDia > 10)
+    const hoyDia = partesBA().dia
+    const hoyMs = Date.now()
+    // Un mes es exigible si: (a) no es anterior al inicio de la app (enero 2025;
+    // así los meses basura pre-2025 no generan deuda fantasma), y (b) ya venció.
+    const esFacturado = (m) => {
+      const dentroDeLaHistoria =
+        m.anio > INICIO_ANIO || (m.anio === INICIO_ANIO && m.mes >= INICIO_MES)
+      if (!dentroDeLaHistoria) return false
+      return (
+        m.anio < anioHoy ||
+        (m.anio === anioHoy && m.mes < mesHoy) ||
+        (m.anio === anioHoy && m.mes === mesHoy && hoyDia > DIA_VENCIMIENTO)
+      )
+    }
 
     const resultado = (deptos || []).map((depto) => {
       const pagosDepto = (todosPagos || []).filter((p) => p.depto_id === depto.id)
