@@ -4,11 +4,12 @@ import { supabase, mesActual, fechaCorta, nombreMes, ultimoMontoDefinido, insert
 
 const METODOS = ['efectivo', 'transferencia', 'otro']
 
-export default function RegisterPaymentModal({ departamentos, deptoIdInicial, onClose, onRegistrado }) {
+export default function RegisterPaymentModal({ departamentos, deptoIdInicial, anioInicial, mesInicial, onClose, onRegistrado }) {
   const { anio, mes } = mesActual()
   const [deptoId, setDeptoId] = useState(deptoIdInicial || departamentos[0]?.id || '')
-  const [anioSel, setAnioSel] = useState(anio)
-  const [mesSel, setMesSel] = useState(mes)
+  // Si viene de un aviso de transferencia, arrancamos en el período informado (F-11).
+  const [anioSel, setAnioSel] = useState(anioInicial || anio)
+  const [mesSel, setMesSel] = useState(mesInicial || mes)
   const [monto, setMonto] = useState('')
   const [metodo, setMetodo] = useState('transferencia')
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
@@ -245,6 +246,8 @@ export default function RegisterPaymentModal({ departamentos, deptoIdInicial, on
             <input
               type="number"
               required
+              min="0.01"
+              step="0.01"
               value={monto}
               onChange={(e) => setMonto(e.target.value)}
               className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"

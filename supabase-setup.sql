@@ -2,6 +2,14 @@
 -- Complejo Figueroa Alcorta - Setup de base de datos en Supabase
 -- =============================================================
 -- Ejecutar este script completo en: Supabase Dashboard > SQL Editor
+--
+-- NOTA: este archivo es el setup base para una instalación NUEVA. El esquema en
+-- producción incorpora además cambios que viven en la carpeta `migrations/`:
+--   - administradores (rol admin explícito), transferencias, configuracion
+--   - departamentos.propietario_user_id (login del propietario)
+--   - pagos.monto_cuota (snapshot de cuota, migrations/f03-monto-cuota.sql)
+--   - is_admin() y políticas de seguridad (migrations/f04-f14-seguridad.sql)
+-- Aplicá también esas migraciones para quedar igual que producción.
 -- =============================================================
 
 -- 1) TABLAS -----------------------------------------------------
@@ -55,8 +63,8 @@ create table if not exists public.propietarios (
 create index if not exists idx_propietarios_depto on public.propietarios(depto_id);
 
 -- Expensas extraordinarias: el admin define una razón y un monto objetivo
--- (total a recaudar). La cuota por unidad es monto / 18. Caja aparte del
--- fondo común de expensas.
+-- (total a recaudar). La cuota por unidad es monto / (unidades afectadas).
+-- Caja aparte del fondo común de expensas.
 create table if not exists public.extraordinarias (
   id bigint generated always as identity primary key,
   razon text not null,
@@ -96,7 +104,8 @@ create table if not exists public.pagos (
   depto_id int not null references public.departamentos(id) on delete cascade,
   mes_id bigint not null references public.meses(id) on delete cascade,
   fecha_pago timestamptz not null default now(),
-  metodo_pago text not null check (metodo_pago in ('efectivo', 'transferencia', 'mercadopago', 'otro')),
+  metodo_pago text not null check (metodo_pago in ('efectivo', 'transferencia', 'otro')),
+  monto_cuota numeric(12, 2),          -- snapshot de la cuota vigente al pagar (F-03)
   monto numeric(12, 2) not null,
   registrado_por text not null default 'admin' check (registrado_por in ('admin', 'inquilino', 'sistema')),
   estado text not null default 'pagado' check (estado in ('pagado', 'pendiente', 'vencido')),
@@ -127,6 +136,39 @@ create table if not exists public.reclamos (
 );
 
 create index if not exists idx_reclamos_depto on public.reclamos(depto_id);
+
+-- 1b) TABLAS/COLUMNAS DEL MODELO ACTUAL --------------------------------------
+-- (En producción se agregaron por migraciones; acá van para instalar de cero.)
+
+-- Login del propietario: se asocia en `departamentos` (no en `propietarios`).
+alter table public.departamentos
+  add column if not exists propietario_user_id uuid references auth.users(id) on delete set null;
+
+-- Administradores explícitos (rol admin). El super admin va hardcodeado en is_admin().
+create table if not exists public.administradores (
+  id bigint generated always as identity primary key,
+  email text not null unique,
+  created_at timestamptz default now()
+);
+
+-- Configuración clave-valor (ej. interés por morosidad: activo/tasa).
+create table if not exists public.configuracion (
+  clave text primary key,
+  valor text
+);
+
+-- Avisos de transferencia informados por residentes (común) o propietarios
+-- (extraordinaria). El admin los revisa y registra el pago correspondiente.
+create table if not exists public.transferencias (
+  id bigint generated always as identity primary key,
+  depto_id int references public.departamentos(id) on delete cascade,
+  mes_id bigint references public.meses(id) on delete set null,
+  extraordinaria_id bigint references public.extraordinarias(id) on delete cascade,
+  tipo text not null default 'comun' check (tipo in ('comun', 'extraordinaria')),
+  notas text,
+  estado text not null default 'pendiente' check (estado in ('pendiente', 'procesada')),
+  created_at timestamptz default now()
+);
 
 -- 2) REALTIME -----------------------------------------------------
 -- Habilita actualizaciones en vivo. El bloque DO evita el error
@@ -161,6 +203,34 @@ begin
     where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'reclamos'
   ) then
     alter publication supabase_realtime add table public.reclamos;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'meses'
+  ) then
+    alter publication supabase_realtime add table public.meses;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'extraordinarias'
+  ) then
+    alter publication supabase_realtime add table public.extraordinarias;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'transferencias'
+  ) then
+    alter publication supabase_realtime add table public.transferencias;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'configuracion'
+  ) then
+    alter publication supabase_realtime add table public.configuracion;
   end if;
 end $$;
 
@@ -201,9 +271,10 @@ alter table public.propietarios enable row level security;
 alter table public.extraordinarias enable row level security;
 alter table public.pagos_extraordinarios enable row level security;
 
--- Función auxiliar: ¿el usuario actual es el admin? (no tiene depto asociado).
--- Es SECURITY DEFINER para poder consultar `departamentos` desde una política
--- de la propia tabla `departamentos` sin disparar recursión de RLS.
+-- Función auxiliar: ¿el usuario actual es administrador? Admin EXPLÍCITO: su
+-- email está en la tabla `administradores` o es el super admin. Nunca por
+-- descarte (una cuenta sin perfil NO es admin). Ver migrations/f04-f14-seguridad.sql.
+-- Requiere la tabla `administradores(email text)`.
 create or replace function public.is_admin()
 returns boolean
 language sql
@@ -211,9 +282,42 @@ security definer
 stable
 set search_path = public
 as $$
-  select not exists (select 1 from public.departamentos where user_id = auth.uid())
-     and not exists (select 1 from public.propietarios where user_id = auth.uid());
+  select
+    lower(coalesce(auth.jwt() ->> 'email', '')) = 'marcoluisvallebella@gmail.com'
+    or exists (
+      select 1 from public.administradores a
+      where lower(a.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+    );
 $$;
+
+-- RLS de las tablas del modelo actual (administradores, configuracion,
+-- transferencias). is_admin() ya está definida arriba.
+alter table public.administradores enable row level security;
+alter table public.configuracion enable row level security;
+alter table public.transferencias enable row level security;
+
+-- La lista de administradores es legible por los autenticados (el cliente la usa
+-- para determinar el rol); solo el admin la modifica.
+create policy "lectura_administradores" on public.administradores
+  for select to authenticated using (true);
+create policy "admin_gestiona_administradores" on public.administradores
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+create policy "lectura_configuracion" on public.configuracion
+  for select to authenticated using (true);
+create policy "admin_gestiona_configuracion" on public.configuracion
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+-- Cualquier autenticado puede informar una transferencia; solo el admin la
+-- procesa/actualiza.
+create policy "lectura_transferencias" on public.transferencias
+  for select to authenticated using (true);
+create policy "insertar_transferencias" on public.transferencias
+  for insert to authenticated with check (true);
+create policy "admin_actualiza_transferencias" on public.transferencias
+  for update to authenticated using (public.is_admin());
+create policy "admin_borra_transferencias" on public.transferencias
+  for delete to authenticated using (public.is_admin());
 
 -- Cualquier usuario autenticado puede LEER departamentos, meses y pagos
 -- (la tabla general y el resumen son visibles para todos los roles).
@@ -283,51 +387,39 @@ create policy "lectura_meses" on public.meses
 create policy "lectura_pagos" on public.pagos
   for select to authenticated using (true);
 
--- Solo el admin (usuario sin departamento asociado) puede modificar meses.
+-- Solo el admin puede modificar meses.
 create policy "admin_modifica_meses" on public.meses
-  for all to authenticated using (
-    not exists (select 1 from public.departamentos d where d.user_id = auth.uid())
-  ) with check (
-    not exists (select 1 from public.departamentos d where d.user_id = auth.uid())
-  );
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
 
--- El admin puede insertar pagos para cualquier depto; el inquilino solo
--- puede insertar pagos de SU PROPIO departamento (ej. "informar transferencia").
-create policy "insertar_pagos" on public.pagos
-  for insert to authenticated with check (
-    not exists (select 1 from public.departamentos d where d.user_id = auth.uid())
-    or depto_id = (select id from public.departamentos where user_id = auth.uid())
-  );
+-- Solo el admin puede insertar/actualizar/borrar pagos. Los residentes NO
+-- cargan pagos directo: informan por la tabla `transferencias` (F-14).
+create policy "admin_inserta_pagos" on public.pagos
+  for insert to authenticated with check (public.is_admin());
 
--- Solo el admin puede actualizar o borrar pagos (ej. confirmar transferencias).
 create policy "admin_actualiza_pagos" on public.pagos
-  for update to authenticated using (
-    not exists (select 1 from public.departamentos d where d.user_id = auth.uid())
-  );
+  for update to authenticated using (public.is_admin()) with check (public.is_admin());
 
 create policy "admin_borra_pagos" on public.pagos
-  for delete to authenticated using (
-    not exists (select 1 from public.departamentos d where d.user_id = auth.uid())
-  );
+  for delete to authenticated using (public.is_admin());
 
--- 5) SEED: 18 departamentos (con email de ejemplo) --------------------
+-- 5) SEED: 19 departamentos (con email de ejemplo) --------------------
 
 insert into public.departamentos (id, nombre, email)
 select g, 'Depto ' || g, 'depto' || g || '@figueroaalcorta.com'
-from generate_series(1, 18) as g
+from generate_series(1, 19) as g
 on conflict (id) do nothing;
 
 -- Un residente inicial por departamento (el admin puede agregar más desde
 -- el módulo "Residentes", con el botón "+ Agregar residente").
 insert into public.residentes (depto_id, nombre, email)
 select g, 'Residente Depto ' || g, 'depto' || g || '@figueroaalcorta.com'
-from generate_series(1, 18) as g
+from generate_series(1, 19) as g
 where not exists (select 1 from public.residentes r where r.depto_id = g);
 
 -- Un propietario inicial por departamento (el admin puede editar/agregar)
 insert into public.propietarios (depto_id, nombre, email)
 select g, 'Propietario Depto ' || g, 'prop' || g || '@figueroaalcorta.com'
-from generate_series(1, 18) as g
+from generate_series(1, 19) as g
 where not exists (select 1 from public.propietarios p where p.depto_id = g);
 
 -- Expensa extraordinaria de ejemplo (objetivo total; cuota por unidad = monto/18)

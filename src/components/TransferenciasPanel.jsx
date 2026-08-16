@@ -53,7 +53,7 @@ export default function TransferenciasPanel({ departamentos }) {
 
     if (!yaPago) {
       const afectados = extra.afecta_deptos?.length || departamentos.length
-      const cuota = afectados ? Number(extra.monto) / afectados : 0
+      const cuota = afectados ? Math.round(Number(extra.monto) / afectados) : 0
       const { error } = await supabase.from('pagos_extraordinarios').insert({
         extraordinaria_id: extra.id,
         depto_id: t.depto_id,
@@ -174,6 +174,8 @@ export default function TransferenciasPanel({ departamentos }) {
         <RegisterPaymentModal
           departamentos={departamentos}
           deptoIdInicial={procesando.departamentos?.id}
+          anioInicial={procesando.meses?.anio}
+          mesInicial={procesando.meses?.mes}
           onClose={() => setProcesando(null)}
           onRegistrado={() => {
             marcarProcesada(procesando.id)

@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { supabase, calcularEstado, mesActual, nombreMes, fechaCorta, INICIO_ANIO, INICIO_MES } from '../lib/supabase'
-import EstadoBadge from './EstadoBadge'
+import { supabase, mesActual, nombreMes, fechaCorta, INICIO_ANIO, INICIO_MES } from '../lib/supabase'
 import PaymentTable from './PaymentTable'
 import RegisterPaymentModal from './RegisterPaymentModal'
 import PersonasPanel from './PersonasPanel'
@@ -30,7 +29,6 @@ export default function AdminPanel() {
   const [interesActivo, setInteresActivo] = useState(false)
   const [interesDiario, setInteresDiario] = useState('')
   const [guardandoInteres, setGuardandoInteres] = useState(false)
-  const [morosos, setMorosos] = useState([])
   const [historial, setHistorial] = useState([])
   const [filtroDepto, setFiltroDepto] = useState('')
   const [filtroPeriodo, setFiltroPeriodo] = useState(() => {
@@ -41,7 +39,6 @@ export default function AdminPanel() {
   const [cargando, setCargando] = useState(true)
   const [modulo, setModulo] = useState('pagos') // 'pagos' | 'transferencias' | 'residentes' | 'propietarios' | 'egresos' | 'extraordinarias' | 'balance' | 'reclamos' | 'usuarios'
   const [pendientesTransferencias, setPendientesTransferencias] = useState(0)
-  const [deudaPorDepto, setDeudaPorDepto] = useState({})
 
   const { anio, mes } = mesActual()
 
@@ -64,32 +61,6 @@ export default function AdminPanel() {
       pagos = data || []
     }
     setPagosMes(pagos)
-
-    // Morosidad: deptos con 2+ meses impagos en total
-    const { data: todosMeses } = await supabase.from('meses').select('*').order('anio').order('mes')
-    const { data: todosPagos } = await supabase.from('pagos').select('*')
-
-    const conteo = {}
-    const deuda = {}
-    for (const d of deptos || []) {
-      conteo[d.id] = 0
-      deuda[d.id] = 0
-    }
-    for (const m of todosMeses || []) {
-      const esFuturo = m.anio > anio || (m.anio === anio && m.mes > mes)
-      if (esFuturo) continue
-      for (const d of deptos || []) {
-        const pago = todosPagos?.find((p) => p.depto_id === d.id && p.mes_id === m.id)
-        const estado = calcularEstado({ tienePago: Boolean(pago), anio: m.anio, mes: m.mes })
-        if (estado !== 'pagado') {
-          conteo[d.id] = (conteo[d.id] || 0) + 1
-          deuda[d.id] = (deuda[d.id] || 0) + Number(m.monto_expensa || 0)
-        }
-      }
-    }
-    setMorosos(Object.entries(conteo).filter(([, c]) => c >= 2).map(([id]) => Number(id)))
-    setDeudaPorDepto(deuda)
-
     setCargando(false)
   }, [anio, mes])
 
@@ -263,8 +234,6 @@ export default function AdminPanel() {
   if (cargando) {
     return <div className="py-20 text-center text-slate-400 text-sm">Cargando panel de administración...</div>
   }
-
-  const totalAdeudadoComplejo = Object.values(deudaPorDepto).reduce((a, b) => a + Number(b || 0), 0)
 
   return (
     <div className="flex flex-col lg:flex-row gap-6">

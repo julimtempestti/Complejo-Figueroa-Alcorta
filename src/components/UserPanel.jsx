@@ -112,10 +112,14 @@ export default function UserPanel({ departamento }) {
     return <div className="py-20 text-center text-slate-400 text-sm">Cargando tu estado de pago...</div>
   }
 
+  const pagosMesActual = (historial || []).filter((p) => mesInfo.id && p.mes_id === mesInfo.id)
+  const pagadoMesActual = pagosMesActual.reduce((a, p) => a + Number(p.monto || 0), 0)
   const estadoActual = calcularEstado({
-    tienePago: Boolean(pagoActual),
+    tienePago: pagadoMesActual > 0,
     anio: mesInfo.anio,
     mes: mesInfo.mes,
+    cuota: mesInfo.id ? cuotaEfectiva(pagosMesActual, mesInfo.monto_expensa) : null,
+    pagado: mesInfo.id ? pagadoMesActual : null,
   })
 
   const botones = [

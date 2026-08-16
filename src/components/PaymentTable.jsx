@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { supabase, calcularEstado, nombreMes, mesActual, fechaCorta, INICIO_ANIO, INICIO_MES } from '../lib/supabase'
+import { supabase, calcularEstado, nombreMes, mesActual, fechaCorta, cuotaEfectiva, INICIO_ANIO, INICIO_MES } from '../lib/supabase'
 import EstadoBadge from './EstadoBadge'
 
 // Tabla general: Depto 1..18 x últimos 3 meses + mes actual.
@@ -76,9 +76,10 @@ export default function PaymentTable({ mostrarMontos = false }) {
     return <div className="py-10 text-center text-slate-400 text-sm">Cargando tabla general...</div>
   }
 
-  function buscarPago(deptoId, mesId) {
-    if (!mesId) return null
-    return pagos.find((p) => p.depto_id === deptoId && p.mes_id === mesId) || null
+  // Todos los pagos de un depto para un mes (puede haber varios: cuotas).
+  function pagosDe(deptoId, mesId) {
+    if (!mesId) return []
+    return pagos.filter((p) => p.depto_id === deptoId && p.mes_id === mesId)
   }
 
   // Tope: no dejar que el mes más viejo visible sea anterior a enero 2025.
@@ -141,20 +142,26 @@ export default function PaymentTable({ mostrarMontos = false }) {
                 {depto.nombre}
               </td>
               {meses.map((m) => {
-                const pago = buscarPago(depto.id, m.id)
+                const pagosCelda = pagosDe(depto.id, m.id)
+                const pagadoMes = pagosCelda.reduce((a, p) => a + Number(p.monto || 0), 0)
+                const cuota = cuotaEfectiva(pagosCelda, m.monto_expensa)
                 const estado = calcularEstado({
-                  tienePago: Boolean(pago),
+                  tienePago: pagadoMes > 0,
                   anio: m.anio,
                   mes: m.mes,
+                  cuota,
+                  pagado: pagadoMes,
                 })
+                const ultima = pagosCelda
+                  .slice()
+                  .sort((a, b) => new Date(b.fecha_pago) - new Date(a.fecha_pago))[0]
                 return (
                   <td key={`${depto.id}-${m.anio}-${m.mes}`} className="px-4 py-3">
                     <div className="flex flex-col gap-1">
                       <EstadoBadge estado={estado} />
-                      {mostrarMontos && pago && (
+                      {mostrarMontos && pagadoMes > 0 && (
                         <span className="text-xs text-slate-400">
-                          ${Number(pago.monto).toLocaleString('es-AR')} ·{' '}
-                          {fechaCorta(pago.fecha_pago)}
+                          ${pagadoMes.toLocaleString('es-AR')} · {fechaCorta(ultima?.fecha_pago)}
                         </span>
                       )}
                     </div>

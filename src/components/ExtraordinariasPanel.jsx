@@ -283,7 +283,7 @@ export default function ExtraordinariasPanel({ editable = false, miDeptoId = nul
               : deptos
           const pagosExtra = pagos.filter((p) => p.extraordinaria_id === extra.id)
           const recaudado = pagosExtra.reduce((a, p) => a + Number(p.monto || 0), 0)
-          const cuota = afectados.length ? extra.monto / afectados.length : 0
+          const cuota = afectados.length ? Math.round(extra.monto / afectados.length) : 0
           const pagados = pagosExtra.length
           const todas = !extra.afecta_deptos || extra.afecta_deptos.length === deptos.length
           const abierta = expandidas.has(extra.id)

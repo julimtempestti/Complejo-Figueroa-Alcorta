@@ -30,6 +30,7 @@ export { demoLogin }
 
 export const ESTADOS = {
   PAGADO: 'pagado',
+  PARCIAL: 'parcial',
   PENDIENTE: 'pendiente',
   VENCIDO: 'vencido',
 }
@@ -38,33 +39,71 @@ export const ESTADOS = {
 export const INICIO_ANIO = 2025
 export const INICIO_MES = 1
 
+// La cuota vence el día 10. Regla única de vencimiento para toda la app (F-16).
+export const DIA_VENCIMIENTO = 10
+
+// Toda la app trabaja en horario de Buenos Aires, sin importar la zona horaria
+// del dispositivo o del servidor donde se ejecute (F-08).
+export const TZ = 'America/Argentina/Buenos_Aires'
+
+// Devuelve { anio, mes, dia } de una fecha (por defecto, ahora) en horario de
+// Buenos Aires. Evita el corrimiento de día/mes por zona horaria.
+export function partesBA(date = new Date()) {
+  const partes = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const val = (t) => Number(partes.find((x) => x.type === t)?.value)
+  return { anio: val('year'), mes: val('month'), dia: val('day') }
+}
+
 export const MESES_NOMBRE = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
 ]
 
 export function mesActual() {
-  const hoy = new Date()
-  return { anio: hoy.getFullYear(), mes: hoy.getMonth() + 1 }
+  const { anio, mes } = partesBA()
+  return { anio, mes }
 }
 
-// El mes vence el día 10. Si hoy es posterior al día 10 y no hay pago
-// registrado para ese mes, se considera "vencido"; antes del día 10
-// sin pago se considera "pendiente".
-export function calcularEstado({ tienePago, anio, mes }) {
+// Estado de un mes para un depto (todo en horario de Buenos Aires):
+//   - parcial   -> hay plata registrada pero no cubre la cuota (F-07).
+//   - pagado    -> cubierto.
+//   - pendiente -> mes futuro/corriente sin vencer, sin pago.
+//   - vencido   -> pasó el día 10 y no está cubierto.
+// `cuota` y `pagado` son opcionales: si se pasan, se detecta el pago parcial.
+export function calcularEstado({ tienePago, anio, mes, cuota = null, pagado = null }) {
+  if (cuota != null && pagado != null && pagado > 0 && pagado < Number(cuota)) {
+    return ESTADOS.PARCIAL
+  }
   if (tienePago) return ESTADOS.PAGADO
 
-  const hoy = new Date()
-  const inicioMes = new Date(anio, mes - 1, 1)
-  const vencimiento = new Date(anio, mes - 1, 10, 23, 59, 59)
-
-  if (hoy < inicioMes) return ESTADOS.PENDIENTE
-  if (hoy > vencimiento) return ESTADOS.VENCIDO
-  return ESTADOS.PENDIENTE
+  const { anio: ha, mes: hm, dia: hd } = partesBA()
+  const esFuturo = anio > ha || (anio === ha && mes > hm)
+  if (esFuturo) return ESTADOS.PENDIENTE
+  const esPasado = anio < ha || (anio === ha && mes < hm)
+  if (esPasado) return ESTADOS.VENCIDO
+  // Mes corriente: vence el día 10.
+  return hd > DIA_VENCIMIENTO ? ESTADOS.VENCIDO : ESTADOS.PENDIENTE
 }
 
 export function nombreMes(mes, anio) {
   return `${MESES_NOMBRE[mes - 1]} ${anio}`
+}
+
+// Devuelve { anio, mes } de una fecha para agruparla por mes. Las fechas "solo
+// día" (YYYY-MM-DD) se toman tal cual (sin corrimiento); los timestamps con
+// zona se convierten a horario de Buenos Aires (F-08).
+export function anioMesBA(valor) {
+  const s = String(valor)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return { anio: Number(s.slice(0, 4)), mes: Number(s.slice(5, 7)) }
+  }
+  const { anio, mes } = partesBA(new Date(s))
+  return { anio, mes }
 }
 
 // Devuelve el último monto de expensa definido (> 0), para heredarlo cuando se

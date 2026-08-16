@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { supabase, MESES_NOMBRE } from '../lib/supabase'
+import { supabase, MESES_NOMBRE, anioMesBA, partesBA } from '../lib/supabase'
 
 // Saldo del complejo al inicio de la historia cargada (enero 2025).
 // A partir de acá se suman todos los ingresos y se restan los egresos.
@@ -21,17 +21,16 @@ export default function BalancePanel() {
   const [mesesVista, setMesesVista] = useState(6) // cuántos meses muestra el gráfico (zoom)
 
   const cargar = useCallback(async () => {
-    const [{ data: pagos }, { data: egresos }, { data: mesesData }] = await Promise.all([
+    const [{ data: pagos }, { data: egresos }] = await Promise.all([
       supabase.from('pagos').select('*'),
       supabase.from('egresos').select('*'),
-      supabase.from('meses').select('*'),
     ])
 
-    // Buckets de los últimos N meses (según el zoom elegido)
-    const hoy = new Date()
+    // Buckets de los últimos N meses (según el zoom), en horario de Buenos Aires.
+    const { anio: hy, mes: hm } = partesBA()
     const buckets = []
-    let y = hoy.getFullYear()
-    let m = hoy.getMonth() + 1
+    let y = hy
+    let m = hm
     for (let i = 0; i < mesesVista; i++) {
       buckets.unshift({ anio: y, mes: m, ingresos: 0, egresos: 0 })
       m -= 1
@@ -39,18 +38,16 @@ export default function BalancePanel() {
     }
     const idx = (a, mm) => buckets.findIndex((b) => b.anio === a && b.mes === mm)
 
-    const mesById = {}
-    for (const mm of mesesData || []) mesById[mm.id] = mm
-
+    // Ingresos por FECHA DE COBRO (caja real), no por el mes de la expensa (F-09).
     for (const p of pagos || []) {
-      const mm = mesById[p.mes_id]
-      if (!mm) continue
-      const i = idx(mm.anio, mm.mes)
+      const { anio: pa, mes: pm } = anioMesBA(p.fecha_pago)
+      const i = idx(pa, pm)
       if (i >= 0) buckets[i].ingresos += Number(p.monto || 0)
     }
+    // Egresos por su fecha, sin corrimiento de zona horaria (F-08).
     for (const e of egresos || []) {
-      const d = new Date(e.fecha)
-      const i = idx(d.getFullYear(), d.getMonth() + 1)
+      const { anio: ea, mes: em } = anioMesBA(e.fecha)
+      const i = idx(ea, em)
       if (i >= 0) buckets[i].egresos += Number(e.monto || 0)
     }
 

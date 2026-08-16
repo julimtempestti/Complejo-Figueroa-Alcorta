@@ -96,9 +96,17 @@ export default function TablaDeudaComplejo({ editable = false }) {
       // Interés sobre lo realmente adeudado de cada mes vencido (F-06).
       const interes = Math.round(interesBruto)
 
-      // Estado del mes seleccionado en el navegador (Al día / Pendiente / Vencido).
-      const pagoSel = mesRow ? pagosDepto.find((p) => p.mes_id === mesRow.id) || null : null
-      const estadoSel = calcularEstado({ tienePago: Boolean(pagoSel), anio: vistaAnio, mes: vistaMes })
+      // Estado del mes seleccionado en el navegador (Al día / Parcial / Pendiente / Vencido).
+      const pagosSel = mesRow ? pagosDepto.filter((p) => p.mes_id === mesRow.id) : []
+      const pagoSel = pagosSel[0] || null
+      const pagadoSel = pagosSel.reduce((a, p) => a + Number(p.monto || 0), 0)
+      const estadoSel = calcularEstado({
+        tienePago: pagadoSel > 0,
+        anio: vistaAnio,
+        mes: vistaMes,
+        cuota: mesRow ? cuotaEfectiva(pagosSel, mesRow.monto_expensa) : null,
+        pagado: mesRow ? pagadoSel : null,
+      })
 
       return { depto, estadoSel, pagoSel, mesesAdeudados, deudaVencida, saldoAFavor, interes }
     })
@@ -203,10 +211,13 @@ export default function TablaDeudaComplejo({ editable = false }) {
     if (estado === 'pagado') {
       return <span className="inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-green-100 text-green-700">Al día</span>
     }
+    if (estado === 'parcial') {
+      return <span className="inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-amber-100 text-amber-700">Pago parcial</span>
+    }
     if (estado === 'vencido') {
       return <span className="inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-red-100 text-red-700">Vencido</span>
     }
-    return <span className="inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-amber-100 text-amber-700">Pendiente</span>
+    return <span className="inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-100 text-yellow-700">Pendiente</span>
   }
 
   // La deuda total de un depto incluye el interés por mora (si está activo).
