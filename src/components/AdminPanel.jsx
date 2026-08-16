@@ -31,10 +31,7 @@ export default function AdminPanel() {
   const [guardandoInteres, setGuardandoInteres] = useState(false)
   const [historial, setHistorial] = useState([])
   const [filtroDepto, setFiltroDepto] = useState('')
-  const [filtroPeriodo, setFiltroPeriodo] = useState(() => {
-    const { anio: a, mes: m } = mesActual()
-    return `${a}-${m}` // "2026-7" — mes corriente por defecto
-  })
+  const [filtroPeriodo, setFiltroPeriodo] = useState('todos') // "Todos los meses" por defecto
   const [modalAbierto, setModalAbierto] = useState(false)
   const [cargando, setCargando] = useState(true)
   const [modulo, setModulo] = useState('pagos') // 'pagos' | 'transferencias' | 'residentes' | 'propietarios' | 'egresos' | 'extraordinarias' | 'balance' | 'reclamos' | 'usuarios'
