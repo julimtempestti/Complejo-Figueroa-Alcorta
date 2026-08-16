@@ -68,8 +68,13 @@ export default function AdminPanel() {
     let query = supabase.from('pagos').select('*, departamentos(*), meses(*)').order('fecha_pago', { ascending: false })
     if (filtroDepto) query = query.eq('depto_id', filtroDepto)
     const { data } = await query
+    // "todos" muestra todos los registros (del depto elegido); si no, filtra por
+    // el mes elegido en la lista desplegable.
+    if (filtroPeriodo === 'todos') {
+      setHistorial(data || [])
+      return
+    }
     const [fAnio, fMes] = filtroPeriodo.split('-').map(Number)
-    // Muestra un solo mes a la vez (el período elegido en la lista desplegable).
     const filtrado = (data || []).filter((p) => p.meses?.anio === fAnio && p.meses?.mes === fMes)
     setHistorial(filtrado)
   }, [filtroDepto, filtroPeriodo])
@@ -508,6 +513,7 @@ export default function AdminPanel() {
             onChange={(e) => setFiltroPeriodo(e.target.value)}
             className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
           >
+            <option value="todos">Todos los meses</option>
             {Array.from({ length: (anio - INICIO_ANIO) * 12 + (mes - INICIO_MES) + 1 }).map((_, i) => {
               let yy = anio
               let mm = mes - i
