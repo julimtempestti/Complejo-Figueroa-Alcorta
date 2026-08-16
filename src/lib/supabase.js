@@ -67,6 +67,48 @@ export function nombreMes(mes, anio) {
   return `${MESES_NOMBRE[mes - 1]} ${anio}`
 }
 
+// Devuelve el último monto de expensa definido (> 0), para heredarlo cuando se
+// registra un pago en un mes que todavía no tiene monto propio. Así la cuota de
+// un período NUNCA queda definida por el importe de un pago suelto (ver F-02).
+export async function ultimoMontoDefinido() {
+  const { data } = await supabase
+    .from('meses')
+    .select('monto_expensa')
+    .gt('monto_expensa', 0)
+    .order('anio', { ascending: false })
+    .order('mes', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return Number(data?.monto_expensa || 0)
+}
+
+// Inserta un pago guardando un "snapshot" de la cuota vigente del mes
+// (monto_cuota). Ese snapshot congela la deuda histórica: si más adelante se
+// edita el monto del mes, los meses ya pagados no se recalculan (ver F-03).
+// Si la columna todavía no existe en la base (migración no aplicada), reintenta
+// sin ella para no romper el registro de pagos.
+export async function insertarPagoConCuota(payload, montoCuota) {
+  const conSnapshot =
+    montoCuota != null && Number(montoCuota) > 0
+      ? { ...payload, monto_cuota: Number(montoCuota) }
+      : payload
+  let res = await supabase.from('pagos').insert(conSnapshot).select().single()
+  if (res.error && /monto_cuota/i.test(res.error.message || '')) {
+    // La columna no existe todavía: registramos el pago igual, sin snapshot.
+    res = await supabase.from('pagos').insert(payload).select().single()
+  }
+  return res
+}
+
+// Cuota efectiva de un depto para un mes: si alguno de sus pagos de ese mes
+// tiene snapshot (monto_cuota), usamos ese valor (congelado); si no, el monto
+// vigente del mes. `pagosMes` son los pagos del depto para ESE mes.
+export function cuotaEfectiva(pagosMes, montoMesVigente) {
+  const conSnap = (pagosMes || []).find((p) => p.monto_cuota != null)
+  if (conSnap) return Number(conSnap.monto_cuota)
+  return Number(montoMesVigente || 0)
+}
+
 // Muestra la fecha de un pago en dd/mm/aaaa evitando el corrimiento de día por
 // zona horaria: los valores "solo fecha" (YYYY-MM-DD) o guardados como
 // medianoche UTC se muestran tal cual (un pago del 1/7 no se ve como 30/6).

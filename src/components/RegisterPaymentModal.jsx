@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { supabase, mesActual, fechaCorta, nombreMes } from '../lib/supabase'
+import { supabase, mesActual, fechaCorta, nombreMes, ultimoMontoDefinido, insertarPagoConCuota } from '../lib/supabase'
 
 const METODOS = ['efectivo', 'transferencia', 'otro']
 
@@ -77,9 +77,14 @@ export default function RegisterPaymentModal({ departamentos, deptoIdInicial, on
     let mesRow = mesRowExistente
 
     if (!mesRow) {
+      // La cuota del período NO la define el importe del pago: heredamos el
+      // último monto definido (F-02). Si no hay ninguno, como último recurso
+      // usamos el monto ingresado para no crear una cuota en $0.
+      const heredado = await ultimoMontoDefinido()
+      const montoExpensa = heredado > 0 ? heredado : Number(monto)
       const { data: nuevoMes, error: errMes } = await supabase
         .from('meses')
-        .insert({ anio: anioSel, mes: mesSel, monto_expensa: monto })
+        .insert({ anio: anioSel, mes: mesSel, monto_expensa: montoExpensa })
         .select()
         .single()
       if (errMes) {
@@ -90,9 +95,9 @@ export default function RegisterPaymentModal({ departamentos, deptoIdInicial, on
       mesRow = nuevoMes
     }
 
-    const { data: pagoCreado, error } = await supabase
-      .from('pagos')
-      .insert({
+    // Snapshot de la cuota vigente del mes al momento del pago (F-03).
+    const { data: pagoCreado, error } = await insertarPagoConCuota(
+      {
         depto_id: Number(deptoId),
         mes_id: mesRow.id,
         fecha_pago: fecha,
@@ -101,9 +106,9 @@ export default function RegisterPaymentModal({ departamentos, deptoIdInicial, on
         registrado_por: 'admin',
         estado: 'pagado',
         notas,
-      })
-      .select()
-      .single()
+      },
+      mesRow.monto_expensa,
+    )
 
     setEnviando(false)
     setDuplicados(null)

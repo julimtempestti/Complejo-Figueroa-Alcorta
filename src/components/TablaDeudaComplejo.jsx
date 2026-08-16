@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { supabase, calcularEstado, mesActual, nombreMes, INICIO_ANIO, INICIO_MES } from '../lib/supabase'
+import { supabase, calcularEstado, mesActual, nombreMes, INICIO_ANIO, INICIO_MES, insertarPagoConCuota, cuotaEfectiva } from '../lib/supabase'
 
 function mesAnterior(anio, mes) {
   return mes === 1 ? { anio: anio - 1, mes: 12 } : { anio, mes: mes - 1 }
@@ -67,11 +67,11 @@ export default function TablaDeudaComplejo({ editable = false }) {
       let interesBruto = 0
       for (const m of todosMeses || []) {
         if (!esFacturado(m)) continue
-        const cuota = Number(m.monto_expensa || 0)
+        const pagosMes = pagosDepto.filter((p) => p.mes_id === m.id)
+        // Cuota efectiva: congelada por el snapshot del pago si existe (F-03).
+        const cuota = cuotaEfectiva(pagosMes, m.monto_expensa)
         facturado += cuota
-        const pagadoMes = pagosDepto
-          .filter((p) => p.mes_id === m.id)
-          .reduce((a, p) => a + Number(p.monto || 0), 0)
+        const pagadoMes = pagosMes.reduce((a, p) => a + Number(p.monto || 0), 0)
         const faltante = Math.max(0, cuota - pagadoMes)
         if (faltante > 0) {
           mesesAdeudados += 1
@@ -175,15 +175,18 @@ export default function TablaDeudaComplejo({ editable = false }) {
 
       const montoPago = Number(mesRow.monto_expensa) > 0 ? Number(mesRow.monto_expensa) : fallback
 
-      const { error } = await supabase.from('pagos').insert({
-        depto_id: fila.depto.id,
-        mes_id: mesRow.id,
-        fecha_pago: new Date().toISOString(),
-        metodo_pago: 'efectivo',
-        monto: montoPago,
-        estado: 'pagado',
-        registrado_por: 'admin',
-      })
+      const { error } = await insertarPagoConCuota(
+        {
+          depto_id: fila.depto.id,
+          mes_id: mesRow.id,
+          fecha_pago: new Date().toISOString(),
+          metodo_pago: 'efectivo',
+          monto: montoPago,
+          estado: 'pagado',
+          registrado_por: 'admin',
+        },
+        montoPago,
+      )
       if (error) { toast.error('No se pudo actualizar'); return }
       toast.success(`${fila.depto.nombre}: marcado como pagado`)
       cargar()

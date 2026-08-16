@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { supabase, calcularEstado, mesActual, nombreMes, fechaCorta } from '../lib/supabase'
+import { supabase, calcularEstado, mesActual, nombreMes, fechaCorta, cuotaEfectiva } from '../lib/supabase'
 import PaymentStatusCard from './PaymentStatusCard'
 import TablaDeudaComplejo from './TablaDeudaComplejo'
 import InformarTransferenciaModal from './InformarTransferenciaModal'
@@ -67,9 +67,11 @@ export default function UserPanel({ departamento }) {
     let interesBruto = 0
     for (const m of todosMeses || []) {
       if (!esFacturado(m)) continue
-      const cuota = Number(m.monto_expensa || 0)
+      const pagosMes = (pagosDepto || []).filter((p) => p.mes_id === m.id)
+      // Cuota efectiva: congelada por el snapshot del pago si existe (F-03).
+      const cuota = cuotaEfectiva(pagosMes, m.monto_expensa)
       facturado += cuota
-      const pagadoMes = (pagosDepto || []).filter((p) => p.mes_id === m.id).reduce((a, p) => a + Number(p.monto || 0), 0)
+      const pagadoMes = pagosMes.reduce((a, p) => a + Number(p.monto || 0), 0)
       const faltante = Math.max(0, cuota - pagadoMes)
       if (faltante > 0) {
         pendientes += 1
